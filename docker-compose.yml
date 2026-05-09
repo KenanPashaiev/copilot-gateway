@@ -1,0 +1,25 @@
+services:
+  copilot-gateway:
+    build: .
+    image: copilot-gateway:latest
+    container_name: copilot-gateway
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      # Required: GitHub token with Copilot access
+      - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN}
+      # Optional overrides (uncomment as needed)
+      # - DEFAULT_MODEL=gpt-4o
+      # - PORT=3001
+      # - LOG_LEVEL=info
+    volumes:
+      # Mount config file (optional — defaults work without it)
+      - ./config.yaml:/config/config.yaml:ro
+      # Mount custom tools directory (optional)
+      # - ./my-tools:/custom-tools:ro
+    # Only expose on localhost by default for security.
+    # Remove "127.0.0.1:" prefix if running on a NAS or server
+    # where other containers need to reach it.
+    # ports:
+    #   - "127.0.0.1:3001:3001"
