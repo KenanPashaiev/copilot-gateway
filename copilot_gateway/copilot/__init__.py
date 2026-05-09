@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from copilot import CopilotClient, SubprocessConfig
@@ -34,9 +35,12 @@ async def get_copilot_client(config: AppConfig | None = None) -> CopilotClient:
             return _client
 
         if _client is None:
-            subprocess_config = SubprocessConfig()
-            if config and config.copilot.cli_path:
-                subprocess_config = SubprocessConfig(cli_path=config.copilot.cli_path)
+            github_token = os.environ.get("COPILOT_GITHUB_TOKEN")
+            cli_path = config.copilot.cli_path if config else None
+            subprocess_config = SubprocessConfig(
+                cli_path=cli_path or None,
+                github_token=github_token,
+            )
 
             _client = CopilotClient(config=subprocess_config)
             logger.info("CopilotClient created")
