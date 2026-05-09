@@ -22,13 +22,16 @@ COPY copilot_gateway/ ./copilot_gateway/
 # Add custom tools directory to Python path so mounted tools are importable
 ENV PYTHONPATH="/custom-tools:${PYTHONPATH}"
 
-# Create directories for config and custom tools
+# Create directories for config, custom tools, and Copilot CLI credentials
 RUN mkdir -p /config /custom-tools
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash appuser \
     && chown -R appuser:appuser /app /config /custom-tools
 USER appuser
+
+# Create .copilot directory for credential persistence (mount a volume here)
+RUN mkdir -p /home/appuser/.copilot
 
 EXPOSE 3001
 

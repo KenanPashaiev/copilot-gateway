@@ -45,6 +45,23 @@ copilot_gateway/
     └── builtins/        # Built-in tools (get_time, web_search)
 ```
 
+## Authentication
+
+copilot-gateway uses the **Copilot CLI's built-in OAuth authentication** (device flow). Before running the gateway, you must log in:
+
+```bash
+# First-time setup — authenticate with GitHub
+copilot auth login
+```
+
+This opens a browser for GitHub OAuth authorization. Credentials are stored in `~/.copilot/` and persist across restarts.
+
+For Docker deployments, mount a volume at `/home/appuser/.copilot` to persist credentials, then run the login inside the container once:
+
+```bash
+docker exec -it <container> copilot auth login
+```
+
 ## Development
 
 ```bash
@@ -53,8 +70,10 @@ python -m venv .venv
 .venv/Scripts/activate   # or source .venv/bin/activate
 pip install -r requirements.txt
 
+# Authenticate with GitHub Copilot (first time only)
+copilot auth login
+
 # Run
-export COPILOT_GITHUB_TOKEN=ghp_your_token_here
 uvicorn copilot_gateway.main:app --host 127.0.0.1 --port 3001
 
 # Test
@@ -84,7 +103,7 @@ Custom tools can be added via the `@define_tool` decorator. See [docs/custom-too
 
 ## Requirements
 
-- GitHub Copilot subscription (includes free tier with limited usage)
+- GitHub account with a Copilot subscription (includes free tier with limited usage)
 - Docker (for container deployment) or Python 3.11+ (for local development)
 
 ## License

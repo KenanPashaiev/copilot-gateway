@@ -72,7 +72,8 @@ These environment variables are always checked and override the corresponding YA
 
 | Variable | Overrides | Example |
 |----------|-----------|---------|
-| `COPILOT_GITHUB_TOKEN` | Copilot SDK auth | `ghp_abc123...` || `COPILOT_API_KEY` | `server.api_key` | `sk-my-secret-key` || `HOST` | `server.host` | `127.0.0.1` |
+| `COPILOT_API_KEY` | `server.api_key` | `sk-my-secret-key` |
+| `HOST` | `server.host` | `127.0.0.1` |
 | `PORT` | `server.port` | `8080` |
 | `LOG_LEVEL` | `server.log_level` | `debug` |
 | `DEFAULT_MODEL` | `copilot.default_model` | `claude-sonnet-4` |
