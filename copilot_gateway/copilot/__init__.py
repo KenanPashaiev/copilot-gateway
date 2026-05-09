@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING
 
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _client: CopilotClient | None = None
 _started = False
+_lock = asyncio.Lock()
 
 
 async def get_copilot_client(config: AppConfig | None = None) -> CopilotClient:
@@ -26,18 +28,23 @@ async def get_copilot_client(config: AppConfig | None = None) -> CopilotClient:
     if _client is not None and _started:
         return _client
 
-    if _client is None:
-        subprocess_config = SubprocessConfig()
-        if config and config.copilot.cli_path:
-            subprocess_config = SubprocessConfig(cli_path=config.copilot.cli_path)
+    async with _lock:
+        # Double-check after acquiring lock
+        if _client is not None and _started:
+            return _client
 
-        _client = CopilotClient(config=subprocess_config)
-        logger.info("CopilotClient created")
+        if _client is None:
+            subprocess_config = SubprocessConfig()
+            if config and config.copilot.cli_path:
+                subprocess_config = SubprocessConfig(cli_path=config.copilot.cli_path)
 
-    if not _started:
-        await _client.start()
-        _started = True
-        logger.info("CopilotClient started")
+            _client = CopilotClient(config=subprocess_config)
+            logger.info("CopilotClient created")
+
+        if not _started:
+            await _client.start()
+            _started = True
+            logger.info("CopilotClient started")
 
     return _client
 

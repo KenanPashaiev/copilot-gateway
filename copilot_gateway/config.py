@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -14,6 +15,7 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 3001
     log_level: str = "info"
+    api_key: str = ""
 
 
 @dataclass
@@ -61,7 +63,10 @@ def _load_yaml(path: str | Path) -> dict:
         return {}
     with open(p) as f:
         data = yaml.safe_load(f)
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        logging.getLogger(__name__).warning("Config file %s did not parse as a dict, ignoring", path)
+        return {}
+    return data
 
 
 def _apply_env_overrides(data: dict) -> dict:
@@ -70,6 +75,7 @@ def _apply_env_overrides(data: dict) -> dict:
         "HOST": ("server", "host"),
         "PORT": ("server", "port"),
         "LOG_LEVEL": ("server", "log_level"),
+        "COPILOT_API_KEY": ("server", "api_key"),
         "DEFAULT_MODEL": ("copilot", "default_model"),
         "COPILOT_CLI_PATH": ("copilot", "cli_path"),
     }
@@ -82,7 +88,10 @@ def _apply_env_overrides(data: dict) -> dict:
             data[section] = {}
         # Convert port to int
         if key == "port":
-            value = int(value)
+            try:
+                value = int(value)
+            except ValueError:
+                continue
         data[section][key] = value
     return data
 

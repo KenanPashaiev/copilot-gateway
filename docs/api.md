@@ -2,7 +2,30 @@
 
 copilot-gateway exposes an OpenAI-compatible REST API. Any client that supports the OpenAI API protocol can connect to it.
 
-Base URL: `http://localhost:3001`
+Default base URL: `http://<host>:<port>` (default `0.0.0.0:3001`)
+
+## Authentication
+
+If the gateway is configured with an API key (`COPILOT_API_KEY` env var or `server.api_key` in config), all endpoints except `/health` require authentication.
+
+Include the key in the `Authorization` header:
+
+```
+Authorization: Bearer <your-api-key>
+```
+
+If no API key is configured, all requests are accepted without authentication.
+
+**Error response (401):**
+```json
+{
+  "error": {
+    "message": "Invalid or missing API key.",
+    "type": "authentication_error",
+    "code": "invalid_api_key"
+  }
+}
+```
 
 ## Endpoints
 
@@ -131,47 +154,27 @@ data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1715270
 data: [DONE]
 ```
 
-## Using with the OpenAI Python Client
+## Error Responses
 
-```python
-from openai import OpenAI
+The gateway returns structured error responses following the OpenAI error format:
 
-client = OpenAI(
-    base_url="http://localhost:3001/v1",
-    api_key="not-needed"
-)
-
-# Non-streaming
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "What time is it?"}]
-)
-print(response.choices[0].message.content)
-
-# Streaming
-stream = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Tell me a story"}],
-    stream=True
-)
-for chunk in stream:
-    if chunk.choices[0].delta.content:
-        print(chunk.choices[0].delta.content, end="")
+**502 — Upstream error:**
+```json
+{
+  "detail": {
+    "error": {
+      "message": "Upstream error from Copilot SDK",
+      "type": "upstream_error"
+    }
+  }
+}
 ```
 
-## Using with curl
+During streaming, if an error occurs mid-stream, the gateway sends an error delta before closing:
+```
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1715270400,"model":"gpt-4o","choices":[{"index":0,"delta":{"content":"[Error: upstream failure]"},"finish_reason":null}]}
 
-```bash
-# Non-streaming
-curl http://localhost:3001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello!"}]}'
+data: {"id":"chatcmpl-abc123","object":"chat.completion.chunk","created":1715270400,"model":"gpt-4o","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}
 
-# Streaming
-curl http://localhost:3001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "Hello!"}], "stream": true}'
-
-# List models
-curl http://localhost:3001/v1/models
+data: [DONE]
 ```

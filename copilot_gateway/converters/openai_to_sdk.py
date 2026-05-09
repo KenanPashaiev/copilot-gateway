@@ -8,36 +8,46 @@ def messages_to_prompt(messages: list[dict]) -> tuple[str | None, str]:
 
     Returns (system_message, prompt) where system_message may be None.
     The prompt is built from all non-system messages, preserving conversation
-    history in a format the SDK can understand.
+    history with clear role boundaries.
     """
     system_message: str | None = None
     conversation_parts: list[str] = []
 
     for msg in messages:
         role = msg.get("role", "user")
-        content = msg.get("content", "")
-
-        # Handle content that may be a list (e.g., multimodal messages)
-        if isinstance(content, list):
-            text_parts = []
-            for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
-                    text_parts.append(part.get("text", ""))
-            content = "\n".join(text_parts)
+        content = _extract_text_content(msg.get("content", ""))
 
         if role == "system":
+            # Use last system message if multiple exist
             system_message = content
         elif role == "assistant":
-            conversation_parts.append(f"Assistant: {content}")
+            conversation_parts.append(f"[assistant]\n{content}")
         elif role == "tool":
             tool_call_id = msg.get("tool_call_id", "unknown")
-            conversation_parts.append(f"Tool result ({tool_call_id}): {content}")
+            conversation_parts.append(
+                f"[tool result (call_id={tool_call_id})]\n{content}"
+            )
         else:
             # user or any other role
-            conversation_parts.append(content)
+            conversation_parts.append(f"[user]\n{content}")
 
     prompt = "\n\n".join(conversation_parts) if conversation_parts else ""
     return system_message, prompt
+
+
+def _extract_text_content(content: str | list | None) -> str:
+    """Extract text from content that may be a string or multimodal list."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_parts = []
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "text":
+                text_parts.append(part.get("text", ""))
+        return "\n".join(text_parts)
+    return str(content)
 
 
 def extract_params(body: dict) -> dict:

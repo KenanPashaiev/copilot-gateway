@@ -57,11 +57,11 @@ def _is_tool(obj) -> bool:
     We check for common markers without importing the Tool class (to avoid
     circular imports or SDK version coupling).
     """
-    if obj is None or isinstance(obj, type):
+    if obj is None or isinstance(obj, (type, bool, int, float, str)):
         return False
     # @define_tool decorated functions have _tool_metadata or similar markers
     # Tool() instances have 'name', 'description', 'handler' attributes
     has_name = hasattr(obj, "name") and isinstance(getattr(obj, "name", None), str)
     has_description = hasattr(obj, "description")
-    has_handler = hasattr(obj, "handler") or callable(obj)
+    has_handler = hasattr(obj, "handler")
     return has_name and has_description and has_handler

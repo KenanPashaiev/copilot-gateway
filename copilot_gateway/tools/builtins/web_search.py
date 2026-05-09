@@ -17,6 +17,8 @@ from pydantic import BaseModel, Field
 
 from copilot.tools import define_tool
 
+from copilot_gateway import __version__
+
 logger = logging.getLogger(__name__)
 
 
@@ -68,7 +70,7 @@ async def _duckduckgo_search(query: str, max_results: int) -> list[dict]:
     def _fetch():
         req = urllib.request.Request(
             url,
-            headers={"User-Agent": "copilot-gateway/0.1.0"},
+            headers={"User-Agent": f"copilot-gateway/{__version__}"},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             return resp.read().decode("utf-8", errors="replace")

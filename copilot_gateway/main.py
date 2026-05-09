@@ -7,8 +7,10 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
+from copilot_gateway import __version__
 from copilot_gateway.config import AppConfig, load_config
 from copilot_gateway.copilot.client import get_copilot_client, shutdown_copilot_client
+from copilot_gateway.middleware import APIKeyMiddleware
 from copilot_gateway.routes import chat, health, models
 from copilot_gateway.tools.registry import load_tools
 
@@ -33,8 +35,13 @@ async def lifespan(app: FastAPI):
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
     logger = logging.getLogger("copilot_gateway")
-    logger.info("Starting copilot-gateway v0.1.0")
+    logger.info("Starting copilot-gateway v%s", __version__)
     logger.info("Default model: %s", cfg.copilot.default_model)
+
+    if cfg.server.api_key:
+        logger.info("API key authentication enabled")
+    else:
+        logger.warning("No API key configured — all requests will be accepted")
 
     # Load tool plugins
     tools = load_tools(cfg.tools.enabled)
@@ -56,9 +63,11 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="copilot-gateway",
         description="OpenAI-compatible API server powered by GitHub Copilot SDK",
-        version="0.1.0",
+        version=__version__,
         lifespan=lifespan,
     )
+
+    app.add_middleware(APIKeyMiddleware)
 
     app.include_router(health.router)
     app.include_router(models.router)

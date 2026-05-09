@@ -4,17 +4,16 @@ copilot-gateway is configured through a combination of a **YAML config file** an
 
 ## Config File
 
-By default, the gateway looks for a config file at `/config/config.yaml` inside the container. Override this path with the `CONFIG_PATH` environment variable.
-
-If no config file is found, the gateway starts with built-in defaults — no config file is required.
+By default, the gateway looks for a config file at the path specified by `CONFIG_PATH` (defaults to `/config/config.yaml`). If no config file is found, the gateway starts with built-in defaults.
 
 ```yaml
-# config.yaml — full example with all options
+# Full example with all options
 
 server:
   host: "0.0.0.0"
   port: 3001
   log_level: "info"
+  api_key: ""
 
 copilot:
   default_model: "gpt-4o"
@@ -38,6 +37,7 @@ tools:
 | `host` | string | `0.0.0.0` | `HOST` | Address to bind to. Use `0.0.0.0` for Docker, `127.0.0.1` for local dev. |
 | `port` | int | `3001` | `PORT` | Port to listen on. |
 | `log_level` | string | `info` | `LOG_LEVEL` | Log level: `debug`, `info`, `warning`, `error`. |
+| `api_key` | string | `""` | `COPILOT_API_KEY` | API key for authenticating incoming requests. If empty, no authentication is required. |
 
 ### copilot
 
@@ -72,8 +72,7 @@ These environment variables are always checked and override the corresponding YA
 
 | Variable | Overrides | Example |
 |----------|-----------|---------|
-| `COPILOT_GITHUB_TOKEN` | Copilot SDK auth | `ghp_abc123...` |
-| `HOST` | `server.host` | `127.0.0.1` |
+| `COPILOT_GITHUB_TOKEN` | Copilot SDK auth | `ghp_abc123...` || `COPILOT_API_KEY` | `server.api_key` | `sk-my-secret-key` || `HOST` | `server.host` | `127.0.0.1` |
 | `PORT` | `server.port` | `8080` |
 | `LOG_LEVEL` | `server.log_level` | `debug` |
 | `DEFAULT_MODEL` | `copilot.default_model` | `claude-sonnet-4` |
@@ -89,13 +88,3 @@ YAML config file
         ↓
 Built-in defaults      (lowest)
 ```
-
-## Minimal Setup
-
-The simplest possible setup — no config file, just one env var:
-
-```bash
-docker run -d -p 3001:3001 -e COPILOT_GITHUB_TOKEN=ghp_xxx copilot-gateway:latest
-```
-
-This uses all defaults: binds to `0.0.0.0:3001`, model `gpt-4o`, both built-in tools enabled.

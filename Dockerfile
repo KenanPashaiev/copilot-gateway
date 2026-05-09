@@ -1,4 +1,4 @@
-FROM python:3.11-slim
+FROM python:3.11-slim@sha256:4fbc9e14722710c3207e4e3fe5d01ed9a40f67cd8a424cdcbaa4bfc1e4a0e61c
 
 LABEL maintainer="kenan"
 LABEL description="OpenAI-compatible API server powered by GitHub Copilot SDK"
@@ -24,6 +24,11 @@ ENV PYTHONPATH="/custom-tools:${PYTHONPATH}"
 
 # Create directories for config and custom tools
 RUN mkdir -p /config /custom-tools
+
+# Create non-root user
+RUN useradd --create-home --shell /bin/bash appuser \
+    && chown -R appuser:appuser /app /config /custom-tools
+USER appuser
 
 EXPOSE 3001
 

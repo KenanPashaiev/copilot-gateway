@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 
@@ -11,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _cache: list[dict] | None = None
 _cache_time: float = 0
+_cache_lock = asyncio.Lock()
 
 
 async def list_models(cache_ttl: int = 300) -> list[dict]:
@@ -25,30 +27,36 @@ async def list_models(cache_ttl: int = 300) -> list[dict]:
     if _cache is not None and (now - _cache_time) < cache_ttl:
         return _cache
 
-    client = await get_copilot_client()
-
-    try:
-        raw_models = await client.list_models()
-        models = []
-        for m in raw_models:
-            model_id = m.id if hasattr(m, "id") else str(m)
-            models.append({
-                "id": model_id,
-                "object": "model",
-                "created": 0,
-                "owned_by": "copilot",
-            })
-        _cache = models
-        _cache_time = now
-        logger.info("Refreshed model list: %d models", len(models))
-    except Exception:
-        logger.exception("Failed to list models from Copilot SDK")
-        if _cache is not None:
+    async with _cache_lock:
+        # Double-check after acquiring lock
+        now = time.monotonic()
+        if _cache is not None and (now - _cache_time) < cache_ttl:
             return _cache
-        _cache = []
-        _cache_time = now
 
-    return _cache
+        client = await get_copilot_client()
+
+        try:
+            raw_models = await client.list_models()
+            models = []
+            for m in raw_models:
+                model_id = m.id if hasattr(m, "id") else str(m)
+                models.append({
+                    "id": model_id,
+                    "object": "model",
+                    "created": 0,
+                    "owned_by": "copilot",
+                })
+            _cache = models
+            _cache_time = now
+            logger.info("Refreshed model list: %d models", len(models))
+        except Exception:
+            logger.exception("Failed to list models from Copilot SDK")
+            if _cache is not None:
+                return _cache
+            _cache = []
+            _cache_time = now
+
+        return _cache
 
 
 def invalidate_cache() -> None:

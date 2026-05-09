@@ -61,23 +61,11 @@ tools:
     - my_tools.calculator   # ← your custom tool
 ```
 
-### 4. Make it available to the container
+### 4. Make it importable
 
-Mount your tools directory into the container and ensure it's on the Python path:
+Custom tool modules must be importable by Python at runtime. Ensure the module's parent directory is on `PYTHONPATH`.
 
-```yaml
-# docker-compose.yml
-services:
-  copilot-gateway:
-    image: copilot-gateway:latest
-    volumes:
-      - ./config.yaml:/config/config.yaml:ro
-      - ./my_tools:/custom-tools/my_tools:ro  # ← mount here
-    environment:
-      - COPILOT_GITHUB_TOKEN=${COPILOT_GITHUB_TOKEN}
-```
-
-The Dockerfile adds `/custom-tools` to `PYTHONPATH` automatically, so `my_tools.calculator` is importable.
+The Dockerfile adds `/custom-tools` to `PYTHONPATH` by default — any modules placed there will be discoverable.
 
 ## Alternative: Using a TOOLS List
 
@@ -135,6 +123,18 @@ Returns the current date and time.
   "date": "2026-05-09",
   "time": "14:30:00",
   "day_of_week": "Saturday"
+}
+```
+
+If an invalid timezone is provided, the tool falls back to UTC and includes a warning:
+```json
+{
+  "datetime": "2026-05-09T14:30:00+00:00",
+  "timezone": "UTC",
+  "date": "2026-05-09",
+  "time": "14:30:00",
+  "day_of_week": "Saturday",
+  "warning": "Unknown timezone 'Mars/Olympus', fell back to UTC"
 }
 ```
 

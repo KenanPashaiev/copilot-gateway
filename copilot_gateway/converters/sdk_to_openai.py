@@ -62,3 +62,18 @@ def make_stream_chunk(
             }
         ],
     }
+
+
+def make_error_response(
+    message: str,
+    error_type: str = "server_error",
+    code: str | None = None,
+) -> dict:
+    """Build an OpenAI-style error response body."""
+    error: dict = {
+        "message": message,
+        "type": error_type,
+    }
+    if code:
+        error["code"] = code
+    return {"error": error}

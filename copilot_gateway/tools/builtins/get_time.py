@@ -58,17 +58,23 @@ class GetTimeParams(BaseModel):
 @define_tool(description="Get the current date and time. Useful when the user asks what time or date it is.")
 async def get_time(params: GetTimeParams) -> dict:
     """Return the current date and time."""
+    requested_tz = params.timezone_name
+    fallback = False
     try:
         import zoneinfo
-        tz = zoneinfo.ZoneInfo(params.timezone_name)
+        tz = zoneinfo.ZoneInfo(requested_tz)
     except (ImportError, KeyError):
         tz = timezone.utc
+        fallback = True
 
     now = datetime.now(tz=tz)
-    return {
+    result = {
         "datetime": now.isoformat(),
         "timezone": str(tz),
         "date": now.strftime("%Y-%m-%d"),
         "time": now.strftime("%H:%M:%S"),
         "day_of_week": now.strftime("%A"),
     }
+    if fallback:
+        result["warning"] = f"Unknown timezone '{requested_tz}', fell back to UTC"
+    return result

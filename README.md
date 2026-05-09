@@ -1,38 +1,17 @@
 # copilot-gateway
 
-An OpenAI-compatible API server powered by the [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Runs as a Docker container, configurable via YAML and environment variables. Supports model selection, streaming, and pluggable tools.
+An OpenAI-compatible API server powered by the [GitHub Copilot SDK](https://github.com/github/copilot-sdk). Exposes Copilot models through the standard OpenAI REST protocol — chat completions (streaming and non-streaming), model listing, and pluggable tools.
 
-Any client that speaks the OpenAI API protocol — [Open WebUI](https://github.com/open-webui/open-webui), [Chatbot UI](https://github.com/mckaywrigley/chatbot-ui), [curl](https://curl.se/), the [OpenAI Python client](https://github.com/openai/openai-python), etc. — can connect to it.
+Any client that speaks the OpenAI API — [Open WebUI](https://github.com/open-webui/open-webui), [Chatbot UI](https://github.com/mckaywrigley/chatbot-ui), [curl](https://curl.se/), the [OpenAI Python client](https://github.com/openai/openai-python), etc. — can connect to it.
 
-## Quick Start
+## Features
 
-### Docker (recommended)
-
-```bash
-docker run -d \
-  -p 3001:3001 \
-  -e COPILOT_GITHUB_TOKEN=ghp_your_token_here \
-  copilot-gateway:latest
-```
-
-### Docker Compose
-
-```bash
-# Copy and edit the config
-cp config.example.yaml config.yaml
-cp .env.example .env
-# Edit .env with your GitHub token
-
-docker compose up -d
-```
-
-### Local Development
-
-```bash
-pip install -r requirements.txt
-export COPILOT_GITHUB_TOKEN=ghp_your_token_here
-uvicorn copilot_gateway.main:app --host 127.0.0.1 --port 3001
-```
+- **OpenAI-compatible REST API** — drop-in replacement for `/v1/chat/completions` and `/v1/models`
+- **Streaming & non-streaming** — Server-Sent Events for real-time token output
+- **API key authentication** — optional Bearer token to protect access
+- **Pluggable tools** — extend the LLM with custom `@define_tool` functions
+- **YAML + env config** — flexible configuration with environment variable overrides
+- **Docker-ready** — ships with a production `Dockerfile`
 
 ## API Endpoints
 
@@ -43,79 +22,65 @@ uvicorn copilot_gateway.main:app --host 127.0.0.1 --port 3001
 | `GET` | `/v1/models/{id}` | Get a specific model |
 | `POST` | `/v1/chat/completions` | Chat completions (streaming & non-streaming) |
 
-### Example: Chat Completion
+## Project Structure
 
-```bash
-curl http://localhost:3001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "Hello!"}]
-  }'
+```
+copilot_gateway/
+├── main.py              # FastAPI app entry point
+├── config.py            # YAML + env config loading
+├── middleware.py         # API key authentication
+├── routes/
+│   ├── chat.py          # POST /v1/chat/completions
+│   ├── models.py        # GET /v1/models
+│   └── health.py        # GET /health
+├── copilot/
+│   ├── __init__.py      # CopilotClient singleton
+│   ├── client.py        # Re-exports
+│   └── models.py        # Model list caching
+├── converters/
+│   ├── openai_to_sdk.py # OpenAI request → SDK format
+│   └── sdk_to_openai.py # SDK response → OpenAI format
+└── tools/
+    ├── registry.py      # Tool discovery & loading
+    └── builtins/        # Built-in tools (get_time, web_search)
 ```
 
-### Example: Streaming
+## Development
 
 ```bash
-curl http://localhost:3001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o",
-    "messages": [{"role": "user", "content": "Tell me a story"}],
-    "stream": true
-  }'
-```
+# Set up
+python -m venv .venv
+.venv/Scripts/activate   # or source .venv/bin/activate
+pip install -r requirements.txt
 
-### Example: OpenAI Python Client
+# Run
+export COPILOT_GITHUB_TOKEN=ghp_your_token_here
+uvicorn copilot_gateway.main:app --host 127.0.0.1 --port 3001
 
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:3001/v1",
-    api_key="not-needed"  # Any value works
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello!"}]
-)
-print(response.choices[0].message.content)
+# Test
+pip install pytest httpx
+pytest tests/ -v
 ```
 
 ## Configuration
 
-The gateway is configured via a **YAML file** with **environment variable overrides**. See [docs/configuration.md](docs/configuration.md) for the full reference.
+The gateway is configured via a **YAML config file** with **environment variable overrides**. See [docs/configuration.md](docs/configuration.md) for the full reference.
 
 **Priority:** Environment variables > YAML file > Built-in defaults
 
-### Key Environment Variables
+## Built-in Tools
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `COPILOT_GITHUB_TOKEN` | *(required)* | GitHub token with Copilot access |
-| `DEFAULT_MODEL` | `gpt-4o` | Default model when not specified in request |
-| `PORT` | `3001` | Port to listen on |
-| `HOST` | `0.0.0.0` | Address to bind to |
-| `CONFIG_PATH` | `/config/config.yaml` | Path to YAML config file |
-| `LOG_LEVEL` | `info` | Log level (debug, info, warning, error) |
-
-## Custom Tools
-
-The gateway supports pluggable tools via a config-driven plugin system. Tools are Python modules that define functions using the Copilot SDK's `@define_tool` decorator.
-
-Two built-in tools are included:
+Two tools are included out of the box:
 - **get_time** — Returns the current date and time
 - **web_search** — Searches the web via DuckDuckGo
 
-See [docs/custom-tools.md](docs/custom-tools.md) for a guide on writing your own tools.
+Custom tools can be added via the `@define_tool` decorator. See [docs/custom-tools.md](docs/custom-tools.md).
 
 ## Documentation
 
-- [Configuration Reference](docs/configuration.md) — All config options
-- [Custom Tools Guide](docs/custom-tools.md) — Writing and registering tools
-- [API Reference](docs/api.md) — Endpoint details with request/response examples
-- [Deployment Guide](docs/deployment.md) — Docker, TrueNAS, reverse proxy setups
+- [API Reference](docs/api.md) — Endpoints, request/response formats, error handling
+- [Configuration Reference](docs/configuration.md) — All config options and environment variables
+- [Custom Tools Guide](docs/custom-tools.md) — Writing and registering tool plugins
 
 ## Requirements
 

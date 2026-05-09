@@ -7,15 +7,19 @@ import json
 import logging
 import uuid
 
-from fastapi import APIRouter, Request
-from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
+from pydantic import BaseModel
 
 from copilot.session import PermissionHandler
 
 from copilot_gateway.copilot.client import get_copilot_client
 from copilot_gateway.converters.openai_to_sdk import extract_params, messages_to_prompt
-from copilot_gateway.converters.sdk_to_openai import make_chat_completion, make_stream_chunk
+from copilot_gateway.converters.sdk_to_openai import (
+    make_chat_completion,
+    make_error_response,
+    make_stream_chunk,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -88,7 +92,6 @@ async def _blocking_response(
         async with await client.create_session(**session_kwargs) as session:
             result = await session.send_and_wait(prompt)
             content = ""
-            # result is a SessionEvent; the actual message is in result.data.content
             if hasattr(result, "data") and hasattr(result.data, "content"):
                 content = result.data.content or ""
             elif hasattr(result, "content"):
@@ -100,10 +103,12 @@ async def _blocking_response(
             return make_chat_completion(model=model, content=content)
     except Exception:
         logger.exception("Error in blocking chat completion")
-        return make_chat_completion(
-            model=model,
-            content="An error occurred while processing the request.",
-            finish_reason="error",
+        raise HTTPException(
+            status_code=502,
+            detail=make_error_response(
+                message="Upstream error from Copilot SDK",
+                error_type="upstream_error",
+            ),
         )
 
 
@@ -137,39 +142,51 @@ async def _stream_response(
     try:
         async with await client.create_session(**session_kwargs) as session:
             done = asyncio.Event()
-            error_occurred = False
+            _queue: asyncio.Queue = asyncio.Queue()
 
             def on_event(event):
-                nonlocal error_occurred
                 if event.type.value == "assistant.message_delta":
                     delta = getattr(event.data, "delta_content", "") or ""
                     if delta:
                         chunk = make_stream_chunk(chunk_id, model, delta_content=delta)
-                        _queue.put_nowait(("chunk", chunk))
+                        _queue.put_nowait(chunk)
                 elif event.type.value in ("session.idle", "assistant.message"):
                     done.set()
 
-            _queue: asyncio.Queue = asyncio.Queue()
             session.on(on_event)
             await session.send(prompt)
 
-            # Yield chunks as they arrive
-            while not done.is_set():
-                try:
-                    msg_type, data = await asyncio.wait_for(_queue.get(), timeout=0.1)
-                    if msg_type == "chunk":
-                        yield f"data: {json.dumps(data)}\n\n"
-                except asyncio.TimeoutError:
-                    continue
-
-            # Drain remaining chunks
-            while not _queue.empty():
-                msg_type, data = _queue.get_nowait()
-                if msg_type == "chunk":
+            # Yield chunks as they arrive, waiting on queue or done signal
+            while not done.is_set() or not _queue.empty():
+                if not _queue.empty():
+                    data = _queue.get_nowait()
                     yield f"data: {json.dumps(data)}\n\n"
+                else:
+                    # Wait for either a queued chunk or the done signal
+                    wait_queue = asyncio.ensure_future(_queue.get())
+                    wait_done = asyncio.ensure_future(done.wait())
+                    finished, pending = await asyncio.wait(
+                        [wait_queue, wait_done],
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    for task in pending:
+                        task.cancel()
+                    if wait_queue in finished:
+                        data = wait_queue.result()
+                        yield f"data: {json.dumps(data)}\n\n"
+
+            # Drain any remaining
+            while not _queue.empty():
+                data = _queue.get_nowait()
+                yield f"data: {json.dumps(data)}\n\n"
 
     except Exception:
         logger.exception("Error in streaming chat completion")
+        error_chunk = make_stream_chunk(
+            chunk_id, model,
+            delta_content="[Error: upstream failure]",
+        )
+        yield f"data: {json.dumps(error_chunk)}\n\n"
 
     # Send the final chunk with finish_reason
     final = make_stream_chunk(chunk_id, model, finish_reason="stop")
