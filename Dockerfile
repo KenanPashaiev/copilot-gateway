@@ -1,4 +1,4 @@
-FROM python:3.11-slim@sha256:4fbc9e14722710c3207e4e3fe5d01ed9a40f67cd8a424cdcbaa4bfc1e4a0e61c
+FROM python:3.11-slim
 
 LABEL maintainer="kenan"
 LABEL description="OpenAI-compatible API server powered by GitHub Copilot SDK"
