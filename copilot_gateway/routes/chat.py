@@ -169,14 +169,25 @@ async def _stream_response(
 
         done = asyncio.Event()
         _queue: asyncio.Queue = asyncio.Queue()
+        _got_content = False  # Track whether we received any assistant content
 
         def on_event(event):
+            nonlocal _got_content
             if event.type.value == "assistant.message_delta":
                 delta = getattr(event.data, "delta_content", "") or ""
                 if delta:
+                    _got_content = True
                     chunk = make_stream_chunk(chunk_id, model, delta_content=delta)
                     _queue.put_nowait(chunk)
-            elif event.type.value in ("session.idle", "assistant.message"):
+            elif event.type.value == "session.idle":
+                # Only signal done if we've already received content.
+                # During tool calls the agent goes idle between turns
+                # before producing the final response.
+                if _got_content:
+                    done.set()
+            elif event.type.value == "assistant.message":
+                # Final message event — always marks the end
+                _got_content = True
                 done.set()
 
         session.on(on_event)
