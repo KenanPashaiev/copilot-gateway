@@ -10,6 +10,29 @@ from copilot_gateway.copilot.client import get_copilot_client
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# SDK bug workaround: ModelBilling.from_dict raises ValueError when the API
+# returns a billing object without a 'multiplier' field.  Monkey-patch it so
+# the entire model list isn't lost because of one model's missing field.
+# ---------------------------------------------------------------------------
+try:
+    from copilot.client import ModelBilling as _ModelBilling
+
+    _original_billing_from_dict = _ModelBilling.from_dict
+
+    @staticmethod  # type: ignore[misc]
+    def _safe_billing_from_dict(obj):  # type: ignore[override]
+        try:
+            return _original_billing_from_dict(obj)
+        except (ValueError, KeyError, TypeError):
+            multiplier = float(obj.get("multiplier", 1.0)) if isinstance(obj, dict) else 1.0
+            return _ModelBilling(multiplier=multiplier)
+
+    _ModelBilling.from_dict = _safe_billing_from_dict
+    logger.debug("Patched ModelBilling.from_dict for missing-multiplier resilience")
+except Exception:
+    pass  # SDK structure changed — patch not needed or not applicable
+
 _cache: list[dict] | None = None
 _cache_time: float = 0
 _cache_lock = asyncio.Lock()
