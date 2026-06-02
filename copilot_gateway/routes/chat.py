@@ -25,6 +25,11 @@ from copilot_gateway.converters.sdk_to_openai import (
     make_error_response,
     make_stream_chunk,
 )
+from copilot_gateway.routes.admin import (
+    ADMIN_MODEL_ID,
+    handle_admin_blocking,
+    handle_admin_streaming,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +60,20 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     model = body.model or config.copilot.default_model
     messages = [m.model_dump(exclude_none=True) for m in body.messages]
+
+    # Virtual admin model — handled entirely in-process, no LLM needed
+    if model == ADMIN_MODEL_ID:
+        if body.stream:
+            return StreamingResponse(
+                handle_admin_streaming(messages, request),
+                media_type="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "Connection": "keep-alive",
+                    "X-Accel-Buffering": "no",
+                },
+            )
+        return await handle_admin_blocking(messages, request)
 
     # Session reuse: client may pass X-Session-Id to continue a conversation
     session_id = request.headers.get("x-session-id")

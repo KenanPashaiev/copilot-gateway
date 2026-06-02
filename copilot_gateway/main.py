@@ -49,6 +49,9 @@ async def lifespan(app: FastAPI):
     app.state.tools = tools
     app.state.config = cfg
 
+    # Record startup time for admin status command
+    app.state.start_time = __import__("time").time()
+
     # Pre-initialize the Copilot client
     await get_copilot_client(cfg)
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, HTTPException, Request
 
 from copilot_gateway.copilot.models import list_models as fetch_models
+from copilot_gateway.routes.admin import ADMIN_MODEL_ID, admin_model_entry
 
 router = APIRouter(prefix="/v1")
 
@@ -12,7 +13,13 @@ router = APIRouter(prefix="/v1")
 @router.get("/models")
 async def list_models(request: Request):
     config = request.app.state.config
-    models = await fetch_models(cache_ttl=config.models.cache_ttl)
+    try:
+        models = await fetch_models(cache_ttl=config.models.cache_ttl)
+    except Exception:
+        models = []
+    # Always include the admin virtual model
+    if not any(m["id"] == ADMIN_MODEL_ID for m in models):
+        models.append(admin_model_entry())
     return {
         "object": "list",
         "data": models,
