@@ -133,4 +133,6 @@ def extract_params(body: dict) -> dict:
     so they are intentionally excluded.
     """
     params = {}
+    if "reasoning_effort" in body:
+        params["reasoning_effort"] = body["reasoning_effort"]
     return params

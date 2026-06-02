@@ -45,6 +45,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: float | None = None
     max_tokens: int | None = None
     max_completion_tokens: int | None = None
+    reasoning_effort: str | None = None
 
 
 @router.post("/chat/completions")

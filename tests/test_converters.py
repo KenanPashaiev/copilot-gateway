@@ -92,6 +92,16 @@ class TestExtractParams:
         params = extract_params(body)
         assert params == {}
 
+    def test_reasoning_effort(self):
+        body = {"reasoning_effort": "high"}
+        params = extract_params(body)
+        assert params == {"reasoning_effort": "high"}
+
+    def test_reasoning_effort_with_unsupported(self):
+        body = {"reasoning_effort": "low", "temperature": 0.5}
+        params = extract_params(body)
+        assert params == {"reasoning_effort": "low"}
+
     def test_no_params(self):
         assert extract_params({"model": "gpt-4o"}) == {}
 
