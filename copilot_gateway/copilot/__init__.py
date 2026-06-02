@@ -34,10 +34,16 @@ async def get_copilot_client(config: AppConfig | None = None) -> CopilotClient:
             return _client
 
         if _client is None:
-            subprocess_config = SubprocessConfig()
+            kwargs: dict = {}
             if config and config.copilot.cli_path:
-                subprocess_config = SubprocessConfig(cli_path=config.copilot.cli_path)
+                kwargs["cli_path"] = config.copilot.cli_path
 
+            idle_timeout = config.copilot.session_idle_timeout if config else 7200
+
+            subprocess_config = SubprocessConfig(
+                session_idle_timeout_seconds=idle_timeout,
+                **kwargs,
+            )
             _client = CopilotClient(config=subprocess_config)
             logger.info("CopilotClient created")
 

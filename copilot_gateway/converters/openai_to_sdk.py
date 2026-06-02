@@ -3,6 +3,28 @@
 from __future__ import annotations
 
 
+def last_user_prompt(messages: list[dict]) -> tuple[str | None, str]:
+    """Extract the system message and only the last user message.
+
+    Used when resuming a session — the SDK already has the conversation
+    history, so we only need the newest user message.
+
+    Returns (system_message, prompt).
+    """
+    system_message: str | None = None
+    last_user_content: str = ""
+
+    for msg in messages:
+        role = msg.get("role", "user")
+        content = _extract_text_content(msg.get("content", ""))
+        if role == "system":
+            system_message = content
+        elif role == "user":
+            last_user_content = content
+
+    return system_message, last_user_content
+
+
 def messages_to_prompt(messages: list[dict]) -> tuple[str | None, str]:
     """Extract system message and user prompt from OpenAI-format messages.
 

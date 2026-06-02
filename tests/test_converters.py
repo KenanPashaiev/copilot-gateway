@@ -5,6 +5,7 @@ from __future__ import annotations
 from copilot_gateway.converters.openai_to_sdk import (
     _extract_text_content,
     extract_params,
+    last_user_prompt,
     messages_to_prompt,
 )
 from copilot_gateway.converters.sdk_to_openai import (
@@ -92,6 +93,38 @@ class TestExtractParams:
 
     def test_no_params(self):
         assert extract_params({"model": "gpt-4o"}) == {}
+
+
+class TestLastUserPrompt:
+    def test_returns_last_user_message(self):
+        messages = [
+            {"role": "system", "content": "Be helpful."},
+            {"role": "user", "content": "First question"},
+            {"role": "assistant", "content": "First answer"},
+            {"role": "user", "content": "Second question"},
+        ]
+        system, prompt = last_user_prompt(messages)
+        assert system == "Be helpful."
+        assert prompt == "Second question"
+
+    def test_no_system(self):
+        messages = [
+            {"role": "user", "content": "Hello"},
+        ]
+        system, prompt = last_user_prompt(messages)
+        assert system is None
+        assert prompt == "Hello"
+
+    def test_empty_messages(self):
+        system, prompt = last_user_prompt([])
+        assert system is None
+        assert prompt == ""
+
+    def test_only_system(self):
+        messages = [{"role": "system", "content": "sys"}]
+        system, prompt = last_user_prompt(messages)
+        assert system == "sys"
+        assert prompt == ""
 
 
 # --- sdk_to_openai ---

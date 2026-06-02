@@ -22,6 +22,7 @@ class ServerConfig:
 class CopilotConfig:
     default_model: str = "gpt-4o"
     cli_path: str = ""
+    session_idle_timeout: int = 7200
 
 
 @dataclass

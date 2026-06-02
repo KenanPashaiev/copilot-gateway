@@ -11,10 +11,14 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 
-from copilot.session import PermissionHandler
-
-from copilot_gateway.copilot.client import get_copilot_client
-from copilot_gateway.converters.openai_to_sdk import extract_params, messages_to_prompt
+from copilot_gateway.copilot.sessions import (
+    disconnect_session,
+    get_or_create_session,
+)
+from copilot_gateway.converters.openai_to_sdk import (
+    last_user_prompt,
+    messages_to_prompt,
+)
 from copilot_gateway.converters.sdk_to_openai import (
     make_chat_completion,
     make_error_response,
@@ -48,15 +52,14 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     tools = request.app.state.tools
 
     model = body.model or config.copilot.default_model
-    system_message, prompt = messages_to_prompt(
-        [m.model_dump(exclude_none=True) for m in body.messages]
-    )
+    messages = [m.model_dump(exclude_none=True) for m in body.messages]
 
-    params = extract_params(body.model_dump(exclude_none=True))
+    # Session reuse: client may pass X-Session-Id to continue a conversation
+    session_id = request.headers.get("x-session-id")
 
     if body.stream:
         return StreamingResponse(
-            _stream_response(model, system_message, prompt, params, tools),
+            _stream_response(model, messages, tools, session_id),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -65,42 +68,39 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
             },
         )
     else:
-        return await _blocking_response(model, system_message, prompt, params, tools)
+        return await _blocking_response(
+            model, messages, tools, session_id,
+        )
 
 
 async def _blocking_response(
     model: str,
-    system_message: str | None,
-    prompt: str,
-    params: dict,
+    messages: list[dict],
     tools: list,
-) -> dict:
+    session_id: str | None,
+) -> JSONResponse:
     """Non-streaming: send prompt and wait for the full response."""
-    client = await get_copilot_client()
-
-    session_kwargs = {
-        "model": model,
-        "on_permission_request": PermissionHandler.approve_all,
-    }
-    if system_message:
-        session_kwargs["system_message"] = {"content": system_message}
-    if tools:
-        session_kwargs["tools"] = tools
-    session_kwargs.update(params)
-
+    session = None
     try:
-        async with await client.create_session(**session_kwargs) as session:
-            result = await session.send_and_wait(prompt)
-            content = ""
-            if hasattr(result, "data") and hasattr(result.data, "content"):
-                content = result.data.content or ""
-            elif hasattr(result, "content"):
-                content = result.content or ""
-            elif isinstance(result, str):
-                content = result
-            else:
-                content = str(result)
-            return make_chat_completion(model=model, content=content)
+        session, sid, is_new = await get_or_create_session(
+            session_id,
+            model=model,
+            system_message=_system_message(messages),
+            tools=tools,
+        )
+
+        prompt = _prompt_for_session(messages, is_new)
+
+        result = await session.send_and_wait(prompt)
+        content = _extract_content(result)
+
+        response = make_chat_completion(model=model, content=content)
+        return JSONResponse(
+            content=response,
+            headers={"X-Session-Id": sid},
+        )
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
     except Exception:
         logger.exception("Error in blocking chat completion")
         raise HTTPException(
@@ -110,76 +110,67 @@ async def _blocking_response(
                 error_type="upstream_error",
             ),
         )
+    finally:
+        if session is not None:
+            await disconnect_session(session)
 
 
 async def _stream_response(
     model: str,
-    system_message: str | None,
-    prompt: str,
-    params: dict,
+    messages: list[dict],
     tools: list,
+    session_id: str | None,
 ):
     """Streaming: yield SSE chunks as the SDK produces delta events."""
-    client = await get_copilot_client()
-
-    session_kwargs = {
-        "model": model,
-        "streaming": True,
-        "on_permission_request": PermissionHandler.approve_all,
-    }
-    if system_message:
-        session_kwargs["system_message"] = {"content": system_message}
-    if tools:
-        session_kwargs["tools"] = tools
-    session_kwargs.update(params)
-
+    session = None
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
-
-    # Send the initial chunk with role
-    initial = make_stream_chunk(chunk_id, model, role="assistant")
-    yield f"data: {json.dumps(initial)}\n\n"
-
     try:
-        async with await client.create_session(**session_kwargs) as session:
-            done = asyncio.Event()
-            _queue: asyncio.Queue = asyncio.Queue()
+        session, sid, is_new = await get_or_create_session(
+            session_id,
+            model=model,
+            system_message=_system_message(messages),
+            tools=tools,
+            streaming=True,
+        )
 
-            def on_event(event):
-                if event.type.value == "assistant.message_delta":
-                    delta = getattr(event.data, "delta_content", "") or ""
-                    if delta:
-                        chunk = make_stream_chunk(chunk_id, model, delta_content=delta)
-                        _queue.put_nowait(chunk)
-                elif event.type.value in ("session.idle", "assistant.message"):
-                    done.set()
+        prompt = _prompt_for_session(messages, is_new)
 
-            session.on(on_event)
-            await session.send(prompt)
+        # Send the initial chunk with role (include session ID
+        # as a custom field so streaming clients can discover it).
+        initial = make_stream_chunk(chunk_id, model, role="assistant")
+        initial["x_session_id"] = sid
+        yield f"data: {json.dumps(initial)}\n\n"
 
-            # Yield chunks as they arrive, waiting on queue or done signal
-            while not done.is_set() or not _queue.empty():
-                if not _queue.empty():
-                    data = _queue.get_nowait()
-                    yield f"data: {json.dumps(data)}\n\n"
-                else:
-                    # Wait for either a queued chunk or the done signal
-                    wait_queue = asyncio.ensure_future(_queue.get())
-                    wait_done = asyncio.ensure_future(done.wait())
-                    finished, pending = await asyncio.wait(
-                        [wait_queue, wait_done],
-                        return_when=asyncio.FIRST_COMPLETED,
-                    )
-                    for task in pending:
-                        task.cancel()
-                    if wait_queue in finished:
-                        data = wait_queue.result()
-                        yield f"data: {json.dumps(data)}\n\n"
+        done = asyncio.Event()
+        _queue: asyncio.Queue = asyncio.Queue()
 
-            # Drain any remaining
-            while not _queue.empty():
-                data = _queue.get_nowait()
+        def on_event(event):
+            if event.type.value == "assistant.message_delta":
+                delta = getattr(event.data, "delta_content", "") or ""
+                if delta:
+                    chunk = make_stream_chunk(chunk_id, model, delta_content=delta)
+                    _queue.put_nowait(chunk)
+            elif event.type.value in ("session.idle", "assistant.message"):
+                done.set()
+
+        session.on(on_event)
+        await session.send(prompt)
+
+        # Yield chunks as they arrive until the session signals completion.
+        while not done.is_set() or not _queue.empty():
+            try:
+                data = await asyncio.wait_for(_queue.get(), timeout=0.1)
                 yield f"data: {json.dumps(data)}\n\n"
+            except asyncio.TimeoutError:
+                continue
 
+        # Drain any remaining
+        while not _queue.empty():
+            data = _queue.get_nowait()
+            yield f"data: {json.dumps(data)}\n\n"
+
+    except (asyncio.CancelledError, KeyboardInterrupt):
+        raise
     except Exception:
         logger.exception("Error in streaming chat completion")
         error_chunk = make_stream_chunk(
@@ -187,8 +178,46 @@ async def _stream_response(
             delta_content="[Error: upstream failure]",
         )
         yield f"data: {json.dumps(error_chunk)}\n\n"
+    finally:
+        if session is not None:
+            await disconnect_session(session)
 
     # Send the final chunk with finish_reason
     final = make_stream_chunk(chunk_id, model, finish_reason="stop")
     yield f"data: {json.dumps(final)}\n\n"
     yield "data: [DONE]\n\n"
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _system_message(messages: list[dict]) -> str | None:
+    """Extract the system message from the message list (last wins)."""
+    system, _ = last_user_prompt(messages)
+    return system
+
+
+def _prompt_for_session(messages: list[dict], is_new: bool) -> str:
+    """Build the prompt string depending on whether the session is new.
+
+    New sessions get the full conversation history as the prompt.
+    Resumed sessions get only the last user message since the SDK
+    already has the prior context.
+    """
+    if is_new:
+        _, prompt = messages_to_prompt(messages)
+    else:
+        _, prompt = last_user_prompt(messages)
+    return prompt
+
+
+def _extract_content(result) -> str:
+    """Pull the text content out of an SDK response."""
+    if hasattr(result, "data") and hasattr(result.data, "content"):
+        return result.data.content or ""
+    if hasattr(result, "content"):
+        return result.content or ""
+    if isinstance(result, str):
+        return result
+    return str(result)
