@@ -132,23 +132,26 @@ async def _cmd_auth_token(token: str, request: Request) -> str:
 
 
 async def _cmd_auth_logout(request: Request) -> str:
-    """Clear stored token and restart the SDK client."""
-    if not _has_stored_token(request):
+    """Clear stored token and/or disconnect CLI credentials."""
+    had_token = _has_stored_token(request)
+    request.app.state.github_token = None
+    request.app.state.logged_out = True
+    await _restart_client(request)
+
+    # Verify we're actually logged out
+    auth_info = await _get_auth_info()
+    if auth_info["authenticated"]:
         return (
-            "No stored token to clear.\n\n"
-            "The gateway may be using the Copilot CLI's own credentials "
-            "(from `copilot auth login`). To clear those, remove the CLI's "
-            "auth files from `~/.copilot`."
+            "\u26a0\ufe0f **Client restarted but still authenticated.**\n\n"
+            "The CLI may have cached credentials. "
+            "Type **auth** to check the current status."
         )
 
-    request.app.state.github_token = None
-    await _restart_client(request)
-    return (
-        "\u2705 **Token cleared and client restarted.**\n\n"
-        "The gateway will fall back to the Copilot CLI's own credentials "
-        "if available.\n\n"
-        "Type **auth** to check the current auth status."
-    )
+    msg = "\u2705 **Logged out and client restarted.**"
+    if had_token:
+        msg += " Stored token cleared."
+    msg += "\n\nType **auth login** to reconnect."
+    return msg
 
 
 async def _cmd_status(request: Request) -> str:
@@ -424,6 +427,7 @@ def _is_follow_up_token(messages: list[dict]) -> bool:
 async def _store_token_and_restart(token: str, request: Request) -> str:
     """Store a GitHub token and restart the SDK client to use it."""
     request.app.state.github_token = token
+    request.app.state.logged_out = False
 
     try:
         await _restart_client(request)
@@ -466,8 +470,15 @@ async def _restart_client(request: Request) -> None:
     token = getattr(request.app.state, "github_token", None)
     if token:
         os.environ["COPILOT_GITHUB_TOKEN"] = token
+        os.environ.pop("COPILOT_LOGGED_OUT", None)
     else:
         os.environ.pop("COPILOT_GITHUB_TOKEN", None)
+
+    # If logged out, tell the SDK not to use CLI's stored credentials
+    if getattr(request.app.state, "logged_out", False) and not token:
+        os.environ["COPILOT_LOGGED_OUT"] = "1"
+    else:
+        os.environ.pop("COPILOT_LOGGED_OUT", None)
 
     # Re-initialize
     config = request.app.state.config

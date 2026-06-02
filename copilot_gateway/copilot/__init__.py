@@ -44,9 +44,17 @@ async def get_copilot_client(config: AppConfig | None = None) -> CopilotClient:
             # Pick up token from env (may be set by admin auth flow)
             github_token = os.environ.get("COPILOT_GITHUB_TOKEN")
 
+            # If COPILOT_LOGGED_OUT is set, disable CLI auto-login
+            logged_out = os.environ.get("COPILOT_LOGGED_OUT") == "1"
+
             subprocess_config = SubprocessConfig(
                 session_idle_timeout_seconds=idle_timeout,
-                **({"github_token": github_token} if github_token else {}),
+                **({
+                    "github_token": github_token,
+                } if github_token else {}),
+                **({
+                    "use_logged_in_user": False,
+                } if logged_out and not github_token else {}),
                 **kwargs,
             )
             _client = CopilotClient(config=subprocess_config)
