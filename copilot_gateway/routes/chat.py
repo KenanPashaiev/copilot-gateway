@@ -78,10 +78,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
     # Session reuse: client may pass X-Session-Id to continue a conversation
     session_id = request.headers.get("x-session-id")
     excluded_tools = config.copilot.excluded_tools or None
+    system_prompt = config.copilot.system_prompt or ""
 
     if body.stream:
         return StreamingResponse(
-            _stream_response(model, messages, tools, session_id, excluded_tools),
+            _stream_response(model, messages, tools, session_id, excluded_tools, system_prompt),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -91,7 +92,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         )
     else:
         return await _blocking_response(
-            model, messages, tools, session_id, excluded_tools,
+            model, messages, tools, session_id, excluded_tools, system_prompt,
         )
 
 
@@ -101,6 +102,7 @@ async def _blocking_response(
     tools: list,
     session_id: str | None,
     excluded_tools: list[str] | None = None,
+    system_prompt: str = "",
 ) -> JSONResponse:
     """Non-streaming: send prompt and wait for the full response."""
     session = None
@@ -108,7 +110,7 @@ async def _blocking_response(
         session, sid, is_new = await get_or_create_session(
             session_id,
             model=model,
-            system_message=_system_message(messages),
+            system_message=_system_message(messages, system_prompt),
             tools=tools,
             excluded_tools=excluded_tools,
         )
@@ -150,6 +152,7 @@ async def _stream_response(
     tools: list,
     session_id: str | None,
     excluded_tools: list[str] | None = None,
+    system_prompt: str = "",
 ):
     """Streaming: yield SSE chunks as the SDK produces delta events."""
     session = None
@@ -158,7 +161,7 @@ async def _stream_response(
         session, sid, is_new = await get_or_create_session(
             session_id,
             model=model,
-            system_message=_system_message(messages),
+            system_message=_system_message(messages, system_prompt),
             tools=tools,
             streaming=True,
             excluded_tools=excluded_tools,
@@ -245,10 +248,11 @@ async def _stream_response(
 # Helpers
 # ------------------------------------------------------------------
 
-def _system_message(messages: list[dict]) -> str | None:
-    """Extract the system message from the message list (last wins)."""
+def _system_message(messages: list[dict], config_prompt: str = "") -> str | None:
+    """Extract the system message, prepending the gateway's default prompt."""
     system, _ = last_user_prompt(messages)
-    return system
+    parts = [p for p in (config_prompt, system) if p]
+    return "\n\n".join(parts) if parts else None
 
 
 def _prompt_for_session(messages: list[dict], is_new: bool) -> str:

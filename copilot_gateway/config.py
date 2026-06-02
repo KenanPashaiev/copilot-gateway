@@ -24,6 +24,13 @@ class CopilotConfig:
     cli_path: str = ""
     session_idle_timeout: int = 7200
     github_client_id: str = "Iv1.b507a08c87ecfe98"
+    system_prompt: str = (
+        "You are a helpful assistant in a chat UI. "
+        "IMPORTANT: Do NOT create, edit, or write any files. "
+        "Do NOT use tools like edit_file, create_file, or run_in_terminal. "
+        "Instead, always include code, scripts, and content directly "
+        "in your response using markdown code blocks."
+    )
     excluded_tools: list[str] = field(default_factory=lambda: [
         "edit_file",
         "create_file",
