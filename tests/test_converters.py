@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from copilot_gateway.converters.openai_to_sdk import (
     _extract_text_content,
+    extract_image_attachments,
     extract_params,
     last_user_prompt,
     messages_to_prompt,
@@ -93,6 +94,104 @@ class TestExtractParams:
 
     def test_no_params(self):
         assert extract_params({"model": "gpt-4o"}) == {}
+
+
+class TestExtractImageAttachments:
+    def test_base64_data_uri(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "What is this?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": "data:image/png;base64,iVBORw0KGgo=",
+                        },
+                    },
+                ],
+            }
+        ]
+        attachments = extract_image_attachments(messages)
+        assert len(attachments) == 1
+        assert attachments[0]["type"] == "blob"
+        assert attachments[0]["data"] == "iVBORw0KGgo="
+        assert attachments[0]["mimeType"] == "image/png"
+
+    def test_https_url(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Describe this"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/photo.jpg"},
+                    },
+                ],
+            }
+        ]
+        attachments = extract_image_attachments(messages)
+        assert len(attachments) == 1
+        assert attachments[0]["type"] == "url"
+        assert attachments[0]["url"] == "https://example.com/photo.jpg"
+
+    def test_multiple_images_across_messages(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/jpeg;base64,/9j/4AAQ="},
+                    },
+                ],
+            },
+            {"role": "assistant", "content": "I see an image."},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "And this one?"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "https://example.com/img2.png"},
+                    },
+                ],
+            },
+        ]
+        attachments = extract_image_attachments(messages)
+        assert len(attachments) == 2
+        assert attachments[0]["type"] == "blob"
+        assert attachments[1]["type"] == "url"
+
+    def test_no_images(self):
+        messages = [
+            {"role": "user", "content": "Just text"},
+            {"role": "user", "content": [{"type": "text", "text": "Also text"}]},
+        ]
+        assert extract_image_attachments(messages) == []
+
+    def test_empty_url_skipped(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": ""}},
+                ],
+            }
+        ]
+        assert extract_image_attachments(messages) == []
+
+    def test_non_http_non_data_skipped(self):
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": "ftp://example.com/img.png"}},
+                ],
+            }
+        ]
+        assert extract_image_attachments(messages) == []
 
 
 class TestLastUserPrompt:

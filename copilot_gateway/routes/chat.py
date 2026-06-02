@@ -16,6 +16,7 @@ from copilot_gateway.copilot.sessions import (
     get_or_create_session,
 )
 from copilot_gateway.converters.openai_to_sdk import (
+    extract_image_attachments,
     last_user_prompt,
     messages_to_prompt,
 )
@@ -90,8 +91,13 @@ async def _blocking_response(
         )
 
         prompt = _prompt_for_session(messages, is_new)
+        attachments = extract_image_attachments(messages)
 
-        result = await session.send_and_wait(prompt)
+        send_kwargs: dict = {}
+        if attachments:
+            send_kwargs["attachments"] = attachments
+
+        result = await session.send_and_wait(prompt, **send_kwargs)
         content = _extract_content(result)
 
         response = make_chat_completion(model=model, content=content)
@@ -154,7 +160,13 @@ async def _stream_response(
                 done.set()
 
         session.on(on_event)
-        await session.send(prompt)
+
+        attachments = extract_image_attachments(messages)
+        send_kwargs: dict = {}
+        if attachments:
+            send_kwargs["attachments"] = attachments
+
+        await session.send(prompt, **send_kwargs)
 
         # Yield chunks as they arrive until the session signals completion.
         while not done.is_set() or not _queue.empty():

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import re
+
 
 def last_user_prompt(messages: list[dict]) -> tuple[str | None, str]:
     """Extract the system message and only the last user message.
@@ -70,6 +73,55 @@ def _extract_text_content(content: str | list | None) -> str:
                 text_parts.append(part.get("text", ""))
         return "\n".join(text_parts)
     return str(content)
+
+
+# Matches data URIs like "data:image/png;base64,iVBOR..."
+_DATA_URI_RE = re.compile(
+    r"^data:(?P<mime>image/[a-zA-Z0-9.+-]+);base64,(?P<data>.+)$",
+    re.DOTALL,
+)
+
+
+def extract_image_attachments(messages: list[dict]) -> list[dict]:
+    """Extract image attachments from OpenAI-format messages.
+
+    Scans all messages for content parts with type "image_url" and converts
+    them to Copilot SDK attachment format.
+
+    Supports:
+    - Base64 data URIs: data:image/png;base64,... → blob attachment
+    - HTTP(S) URLs: https://example.com/img.png → url attachment
+
+    Returns a list of SDK-format attachment dicts.
+    """
+    attachments: list[dict] = []
+
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            image_url_obj = part.get("image_url", {})
+            url = image_url_obj.get("url", "") if isinstance(image_url_obj, dict) else ""
+            if not url:
+                continue
+
+            match = _DATA_URI_RE.match(url)
+            if match:
+                attachments.append({
+                    "type": "blob",
+                    "data": match.group("data"),
+                    "mimeType": match.group("mime"),
+                })
+            elif url.startswith(("http://", "https://")):
+                attachments.append({
+                    "type": "url",
+                    "url": url,
+                })
+
+    return attachments
 
 
 def extract_params(body: dict) -> dict:
