@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 import urllib.parse
@@ -76,7 +77,7 @@ async def _cmd_auth(request: Request) -> str:
     auth_info = await _get_auth_info()
 
     if auth_info["authenticated"]:
-        login = auth_info.get("login", "unknown")
+        login = auth_info.get("login") or "unknown"
         auth_type = auth_info.get("auth_type", "")
         has_stored = _has_stored_token(request)
         lines = [
@@ -225,7 +226,7 @@ async def _cmd_status(request: Request) -> str:
 
     auth_info = await _get_auth_info()
     if auth_info["authenticated"]:
-        login = auth_info.get("login", "unknown")
+        login = auth_info.get("login") or "unknown"
         auth_status = f"\u2705 @{login}"
     else:
         auth_status = "\u274c " + auth_info.get("message", "not authenticated")
@@ -416,9 +417,16 @@ async def _get_auth_info() -> dict:
         from copilot_gateway.copilot.client import get_copilot_client
         client = await get_copilot_client()
         auth = await client.get_auth_status()
+        login = auth.login
+
+        # The SDK may return login=None for token-based auth;
+        # fall back to the GitHub API to resolve the username.
+        if auth.isAuthenticated and not login:
+            login = await _fetch_github_login()
+
         return {
             "authenticated": auth.isAuthenticated,
-            "login": auth.login,
+            "login": login,
             "auth_type": auth.authType,
             "host": auth.host,
             "message": auth.statusMessage or (
@@ -431,6 +439,32 @@ async def _get_auth_info() -> dict:
             "authenticated": False,
             "message": "SDK client not available",
         }
+
+
+async def _fetch_github_login() -> str | None:
+    """Resolve the GitHub username using the stored token."""
+    token = os.environ.get("COPILOT_GITHUB_TOKEN")
+    if not token:
+        return None
+    try:
+        req = urllib.request.Request(
+            "https://api.github.com/user",
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/json",
+                "User-Agent": "copilot-gateway",
+            },
+        )
+
+        def _do():
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return json.loads(resp.read().decode())
+
+        data = await asyncio.to_thread(_do)
+        return data.get("login")
+    except Exception:
+        logger.debug("Admin: could not fetch GitHub login")
+        return None
 
 
 async def _check_auth_ok() -> bool:
@@ -472,7 +506,7 @@ async def _store_token_and_restart(token: str, request: Request) -> str:
         # Verify auth works with the new token
         auth_info = await _get_auth_info()
         if auth_info["authenticated"]:
-            login = auth_info.get("login", "unknown")
+            login = auth_info.get("login") or "unknown"
             return (
                 f"\u2705 **Authenticated as @{login}!**\n\n"
                 "Token stored. You can now use any model for chat.\n\n"
