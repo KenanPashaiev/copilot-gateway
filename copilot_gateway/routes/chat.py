@@ -77,10 +77,11 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
 
     # Session reuse: client may pass X-Session-Id to continue a conversation
     session_id = request.headers.get("x-session-id")
+    excluded_tools = config.copilot.excluded_tools or None
 
     if body.stream:
         return StreamingResponse(
-            _stream_response(model, messages, tools, session_id),
+            _stream_response(model, messages, tools, session_id, excluded_tools),
             media_type="text/event-stream",
             headers={
                 "Cache-Control": "no-cache",
@@ -90,7 +91,7 @@ async def chat_completions(body: ChatCompletionRequest, request: Request):
         )
     else:
         return await _blocking_response(
-            model, messages, tools, session_id,
+            model, messages, tools, session_id, excluded_tools,
         )
 
 
@@ -99,6 +100,7 @@ async def _blocking_response(
     messages: list[dict],
     tools: list,
     session_id: str | None,
+    excluded_tools: list[str] | None = None,
 ) -> JSONResponse:
     """Non-streaming: send prompt and wait for the full response."""
     session = None
@@ -108,6 +110,7 @@ async def _blocking_response(
             model=model,
             system_message=_system_message(messages),
             tools=tools,
+            excluded_tools=excluded_tools,
         )
 
         prompt = _prompt_for_session(messages, is_new)
@@ -146,6 +149,7 @@ async def _stream_response(
     messages: list[dict],
     tools: list,
     session_id: str | None,
+    excluded_tools: list[str] | None = None,
 ):
     """Streaming: yield SSE chunks as the SDK produces delta events."""
     session = None
@@ -157,6 +161,7 @@ async def _stream_response(
             system_message=_system_message(messages),
             tools=tools,
             streaming=True,
+            excluded_tools=excluded_tools,
         )
 
         prompt = _prompt_for_session(messages, is_new)

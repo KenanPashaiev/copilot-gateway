@@ -27,6 +27,7 @@ async def get_or_create_session(
     system_message: str | None = None,
     tools: list | None = None,
     streaming: bool = False,
+    excluded_tools: list[str] | None = None,
 ) -> tuple[CopilotSession, str, bool]:
     """Return a live ``CopilotSession`` and its session ID.
 
@@ -44,6 +45,7 @@ async def get_or_create_session(
         system_message=system_message,
         tools=tools,
         streaming=streaming,
+        excluded_tools=excluded_tools,
     )
 
     # Try to resume an existing session
@@ -86,6 +88,7 @@ def _build_session_kwargs(
     system_message: str | None,
     tools: list | None,
     streaming: bool,
+    excluded_tools: list[str] | None = None,
 ) -> dict:
     """Build the kwargs dict shared by create_session / resume_session."""
     kwargs: dict = {
@@ -98,5 +101,7 @@ def _build_session_kwargs(
         kwargs["tools"] = tools
     if streaming:
         kwargs["streaming"] = True
+    if excluded_tools:
+        kwargs["excluded_tools"] = excluded_tools
     return kwargs
 

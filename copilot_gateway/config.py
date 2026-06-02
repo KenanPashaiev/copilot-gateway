@@ -24,6 +24,16 @@ class CopilotConfig:
     cli_path: str = ""
     session_idle_timeout: int = 7200
     github_client_id: str = "Iv1.b507a08c87ecfe98"
+    excluded_tools: list[str] = field(default_factory=lambda: [
+        "edit_file",
+        "create_file",
+        "replace_in_file",
+        "write_file",
+        "delete_file",
+        "rename_file",
+        "create_directory",
+        "run_in_terminal",
+    ])
 
 
 @dataclass

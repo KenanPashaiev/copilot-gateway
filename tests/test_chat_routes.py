@@ -25,6 +25,7 @@ class _ServerConfig:
 @dataclass
 class _CopilotConfig:
     default_model: str = "gpt-4o"
+    excluded_tools: list = field(default_factory=list)
 
 
 @dataclass
