@@ -70,12 +70,16 @@ async def list_models(cache_ttl: int = 300) -> list[dict]:
             models = []
             for m in raw_models:
                 model_id = m.id if hasattr(m, "id") else str(m)
-                models.append({
+                entry = {
                     "id": model_id,
                     "object": "model",
                     "created": 0,
                     "owned_by": "copilot",
-                })
+                }
+                # Include display name if the SDK provides one
+                if hasattr(m, "name") and m.name:
+                    entry["name"] = m.name
+                models.append(entry)
             _cache = models
             _cache_time = now
             logger.info("Refreshed model list: %d models", len(models))
