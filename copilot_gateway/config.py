@@ -23,6 +23,7 @@ class CopilotConfig:
     default_model: str = "gpt-4o"
     cli_path: str = ""
     session_idle_timeout: int = 7200
+    github_client_id: str = "Iv1.b507a08c87ecfe98"
 
 
 @dataclass

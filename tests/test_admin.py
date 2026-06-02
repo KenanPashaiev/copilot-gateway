@@ -5,10 +5,9 @@ from __future__ import annotations
 from copilot_gateway.routes.admin import (
     ADMIN_MODEL_ID,
     _cmd_help,
-    _extract_token,
     _format_uptime,
     _get_last_user_text,
-    _is_follow_up_token,
+    _has_pending_device_flow,
     _parse_command,
     admin_model_entry,
 )
@@ -43,6 +42,10 @@ class TestParseCommand:
         msgs = [{"role": "user", "content": "restart"}]
         assert _parse_command(msgs) == ("restart", "")
 
+    def test_check(self):
+        msgs = [{"role": "user", "content": "check"}]
+        assert _parse_command(msgs) == ("check", "")
+
     def test_auth_status(self):
         msgs = [{"role": "user", "content": "auth"}]
         assert _parse_command(msgs) == ("auth", "")
@@ -54,12 +57,6 @@ class TestParseCommand:
     def test_auth_logout(self):
         msgs = [{"role": "user", "content": "auth logout"}]
         assert _parse_command(msgs) == ("auth_logout", "")
-
-    def test_auth_token(self):
-        msgs = [{"role": "user", "content": "auth token ghp_abc123def456"}]
-        cmd, arg = _parse_command(msgs)
-        assert cmd == "auth_token"
-        assert "ghp_abc123def456" in arg
 
     def test_unrecognized_defaults_to_unknown(self):
         msgs = [{"role": "user", "content": "asdfghjkl"}]
@@ -80,23 +77,40 @@ class TestParseCommand:
         msgs = [{"role": "user", "content": "AUTH LOGIN"}]
         assert _parse_command(msgs) == ("auth_login", "")
 
-    def test_follow_up_token_detected(self):
+    def test_pending_device_flow_any_message_becomes_check(self):
         msgs = [
             {"role": "user", "content": "auth login"},
-            {"role": "assistant", "content": "Type: auth token YOUR_TOKEN"},
-            {"role": "user", "content": "ghp_abcdef1234567890abcdef1234567890abcdef"},
+            {"role": "assistant", "content": "Go to url... type **check** again"},
+            {"role": "user", "content": "done"},
         ]
-        cmd, arg = _parse_command(msgs)
-        assert cmd == "auth_token"
-        assert arg.startswith("ghp_")
+        assert _parse_command(msgs) == ("check", "")
 
-    def test_follow_up_non_token_not_detected(self):
+    def test_no_pending_flow_unrecognized_stays_unknown(self):
         msgs = [
             {"role": "user", "content": "auth login"},
-            {"role": "assistant", "content": "Type: auth token YOUR_TOKEN"},
-            {"role": "user", "content": "what?"},
+            {"role": "assistant", "content": "Here are the models"},
+            {"role": "user", "content": "done"},
         ]
         assert _parse_command(msgs) == ("unknown", "")
+
+
+class TestHasPendingDeviceFlow:
+    def test_detects_check_prompt(self):
+        msgs = [
+            {"role": "assistant", "content": "Once done, type **check** and I'll complete the login."},
+            {"role": "user", "content": "ok"},
+        ]
+        assert _has_pending_device_flow(msgs) is True
+
+    def test_no_check_prompt(self):
+        msgs = [
+            {"role": "assistant", "content": "Here are the available models"},
+            {"role": "user", "content": "ok"},
+        ]
+        assert _has_pending_device_flow(msgs) is False
+
+    def test_empty(self):
+        assert _has_pending_device_flow([]) is False
 
 
 class TestGetLastUserText:
@@ -123,56 +137,6 @@ class TestGetLastUserText:
             {"role": "user", "content": "second"},
         ]
         assert _get_last_user_text(msgs) == "second"
-
-
-class TestExtractToken:
-    def test_ghp_token(self):
-        token = _extract_token("ghp_abcdef1234567890abcdef1234567890abcdef")
-        assert token is not None
-        assert token.startswith("ghp_")
-
-    def test_github_pat_token(self):
-        token = _extract_token("github_pat_abcdefghijklmnopqrstuv1234")
-        assert token is not None
-        assert token.startswith("github_pat_")
-
-    def test_code_fenced_token(self):
-        token = _extract_token("`ghp_abcdef1234567890abcdef1234567890abcdef`")
-        assert token is not None
-        assert token.startswith("ghp_")
-
-    def test_long_string_accepted(self):
-        # A 40-char hex string that doesn't match known prefixes
-        token = _extract_token("a" * 40)
-        assert token == "a" * 40
-
-    def test_short_string_rejected(self):
-        assert _extract_token("short") is None
-
-    def test_string_with_spaces_rejected(self):
-        assert _extract_token("this is not a token") is None
-
-    def test_empty_string(self):
-        assert _extract_token("") is None
-
-
-class TestIsFollowUpToken:
-    def test_after_auth_instructions(self):
-        msgs = [
-            {"role": "assistant", "content": "Type: auth token YOUR_TOKEN"},
-            {"role": "user", "content": "ghp_abc"},
-        ]
-        assert _is_follow_up_token(msgs) is True
-
-    def test_after_unrelated_message(self):
-        msgs = [
-            {"role": "assistant", "content": "Here are the models"},
-            {"role": "user", "content": "ghp_abc"},
-        ]
-        assert _is_follow_up_token(msgs) is False
-
-    def test_empty(self):
-        assert _is_follow_up_token([]) is False
 
 
 class TestCmdHelp:

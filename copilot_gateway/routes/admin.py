@@ -7,10 +7,13 @@ Works even when the gateway has no Copilot authentication configured.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import time
+import urllib.parse
+import urllib.request
 import uuid
 
 from fastapi import Request
@@ -97,38 +100,97 @@ async def _cmd_auth(request: Request) -> str:
 
 
 async def _cmd_auth_login(messages: list[dict], request: Request) -> str:
-    """Handle the auth login flow."""
-    text = _get_last_user_text(messages)
+    """Start the GitHub device flow."""
+    client_id = request.app.state.config.copilot.github_client_id
+    if not client_id:
+        return (
+            "\u274c **Device flow not configured.**\n\n"
+            "Set `copilot.github_client_id` in your config to enable "
+            "interactive login."
+        )
 
-    # Check if the user included a token in the "auth login <token>" message
-    rest = text.strip()
-    if rest.lower().startswith("auth login"):
-        rest = rest[len("auth login"):].strip()
-    token = _extract_token(rest) if rest else None
-    if token:
-        return await _store_token_and_restart(token, request)
+    try:
+        device = await _start_device_flow(client_id)
+    except Exception as e:
+        logger.exception("Admin: device flow start failed")
+        return f"\u274c **Failed to start device flow:** {e}"
 
-    # Show login instructions
+    # Store pending flow on app state
+    request.app.state.pending_device_flow = {
+        "device_code": device["device_code"],
+        "user_code": device["user_code"],
+        "verification_uri": device["verification_uri"],
+        "interval": device.get("interval", 5),
+        "expires_at": time.time() + device.get("expires_in", 900),
+        "client_id": client_id,
+    }
+
+    uri = device["verification_uri"]
+    code = device["user_code"]
     return (
-        "**Connect your GitHub account**\n\n"
-        "Paste your GitHub token below. You can get one by:\n\n"
-        "1. **GitHub CLI** (easiest): Run `gh auth token` in your terminal\n"
-        "2. **Personal Access Token**: "
-        "[Create one](https://github.com/settings/tokens) with the **copilot** scope\n"
-        "3. **Copilot CLI**: Run `copilot auth login` and copy the token\n\n"
-        "Then type:\n"
-        "```\nauth token YOUR_TOKEN_HERE\n```"
+        "**GitHub Device Login**\n\n"
+        f"1. Go to: **[{uri}]({uri})**\n"
+        f"2. Enter code: **`{code}`**\n"
+        f"3. Authorize the application\n\n"
+        "Once done, type **check** and I'll complete the login."
     )
 
 
-async def _cmd_auth_token(token: str, request: Request) -> str:
-    """Store a token provided by the user."""
-    if not token:
+async def _cmd_auth_check(request: Request) -> str:
+    """Poll GitHub for the device flow token."""
+    pending = getattr(request.app.state, "pending_device_flow", None)
+    if not pending:
         return (
-            "No token provided. Usage:\n"
-            "```\nauth token YOUR_TOKEN_HERE\n```"
+            "No pending login. Type **auth login** to start."
         )
-    return await _store_token_and_restart(token, request)
+
+    if time.time() > pending["expires_at"]:
+        request.app.state.pending_device_flow = None
+        return (
+            "\u274c **Login expired.** The code is no longer valid.\n\n"
+            "Type **auth login** to get a new code."
+        )
+
+    try:
+        result = await _poll_device_flow(
+            pending["client_id"],
+            pending["device_code"],
+        )
+    except Exception as e:
+        logger.exception("Admin: device flow poll failed")
+        return f"\u274c **Error checking login:** {e}"
+
+    if result.get("access_token"):
+        # Success — store token and restart
+        request.app.state.pending_device_flow = None
+        return await _store_token_and_restart(
+            result["access_token"], request
+        )
+
+    error = result.get("error", "")
+    if error == "authorization_pending":
+        uri = pending["verification_uri"]
+        code = pending["user_code"]
+        return (
+            "\u23f3 **Waiting for authorization...**\n\n"
+            f"Go to **[{uri}]({uri})** and enter code: **`{code}`**\n\n"
+            "Type **check** again after you've authorized."
+        )
+    if error == "slow_down":
+        return "\u23f3 **Please wait a moment**, then type **check** again."
+    if error == "expired_token":
+        request.app.state.pending_device_flow = None
+        return (
+            "\u274c **Code expired.** Type **auth login** to get a new one."
+        )
+    if error == "access_denied":
+        request.app.state.pending_device_flow = None
+        return "\u274c **Authorization was denied.** Type **auth login** to try again."
+
+    # Unknown error
+    request.app.state.pending_device_flow = None
+    desc = result.get("error_description", error)
+    return f"\u274c **Login failed:** {desc}"
 
 
 async def _cmd_auth_logout(request: Request) -> str:
@@ -252,9 +314,6 @@ def _parse_command(messages: list[dict]) -> tuple[str, str]:
     lower = text.lower().strip()
 
     # Multi-word commands first (order matters)
-    if lower.startswith("auth token"):
-        rest = text[len("auth token"):].strip()
-        return "auth_token", rest
     if lower.startswith("auth login"):
         return "auth_login", ""
     if lower.startswith("auth logout"):
@@ -263,17 +322,13 @@ def _parse_command(messages: list[dict]) -> tuple[str, str]:
         return "auth", ""
 
     # Single-word commands
-    for cmd in ("restart", "status", "models", "tools", "help"):
+    for cmd in ("check", "restart", "status", "models", "tools", "help"):
         if lower.startswith(cmd):
             return cmd, ""
 
-    # Follow-up token detection: if the previous assistant message
-    # was the auth login instructions and the user's reply looks
-    # like a token, treat it as ``auth_token``.
-    if _is_follow_up_token(messages):
-        token = _extract_token(text)
-        if token:
-            return "auth_token", token
+    # If there's a pending device flow, treat any message as "check"
+    if _has_pending_device_flow(messages):
+        return "check", ""
 
     return "unknown", ""
 
@@ -289,8 +344,8 @@ async def _dispatch(
         return await _cmd_auth(request)
     if command == "auth_login":
         return await _cmd_auth_login(messages, request)
-    if command == "auth_token":
-        return await _cmd_auth_token(arg, request)
+    if command == "check":
+        return await _cmd_auth_check(request)
     if command == "auth_logout":
         return await _cmd_auth_logout(request)
     if command == "status":
@@ -395,32 +450,14 @@ _TOKEN_PATTERN = re.compile(
 )
 
 
-def _extract_token(text: str) -> str | None:
-    """Try to extract a GitHub token from user text."""
-    # Strip markdown code fences
-    text = text.strip().strip("`").strip()
-
-    # Match known GitHub token patterns
-    match = _TOKEN_PATTERN.search(text)
-    if match:
-        return match.group(1)
-
-    # If the whole text looks like a single token string (no spaces, 20+ chars)
-    stripped = text.strip()
-    if len(stripped) >= 20 and " " not in stripped and "\n" not in stripped:
-        return stripped
-
-    return None
-
-
-def _is_follow_up_token(messages: list[dict]) -> bool:
-    """Check if the last assistant message was auth login instructions."""
+def _has_pending_device_flow(messages: list[dict]) -> bool:
+    """Check if the last assistant message was a device flow prompt."""
     for msg in reversed(messages):
         if msg.get("role") == "assistant":
             content = msg.get("content", "")
-            if isinstance(content, str) and "auth token" in content.lower():
+            if isinstance(content, str) and "type **check**" in content.lower():
                 return True
-            break  # Only check the last assistant message
+            break
     return False
 
 
@@ -516,3 +553,58 @@ def _format_uptime(seconds: float) -> str:
     hours = s // 3600
     minutes = (s % 3600) // 60
     return f"{hours}h {minutes}m"
+
+
+# ------------------------------------------------------------------
+# GitHub Device Flow
+# ------------------------------------------------------------------
+
+_DEVICE_CODE_URL = "https://github.com/login/device/code"
+_ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
+
+
+async def _start_device_flow(client_id: str) -> dict:
+    """Start a GitHub device authorization flow.
+
+    Returns a dict with device_code, user_code, verification_uri, etc.
+    """
+    data = urllib.parse.urlencode({
+        "client_id": client_id,
+        "scope": "copilot",
+    }).encode()
+
+    req = urllib.request.Request(
+        _DEVICE_CODE_URL,
+        data=data,
+        headers={"Accept": "application/json"},
+    )
+
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+
+    return await asyncio.to_thread(_do_request)
+
+
+async def _poll_device_flow(client_id: str, device_code: str) -> dict:
+    """Poll GitHub for the access token.
+
+    Returns a dict with either access_token or error.
+    """
+    data = urllib.parse.urlencode({
+        "client_id": client_id,
+        "device_code": device_code,
+        "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+    }).encode()
+
+    req = urllib.request.Request(
+        _ACCESS_TOKEN_URL,
+        data=data,
+        headers={"Accept": "application/json"},
+    )
+
+    def _do_request():
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read().decode())
+
+    return await asyncio.to_thread(_do_request)
