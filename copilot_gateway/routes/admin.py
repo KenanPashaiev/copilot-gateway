@@ -35,6 +35,7 @@ def admin_model_entry() -> dict:
     """Return an OpenAI-format model dict for the admin virtual model."""
     return {
         "id": ADMIN_MODEL_ID,
+        "name": "\u2699\ufe0f Gateway Admin",
         "object": "model",
         "created": 0,
         "owned_by": "copilot-gateway",
