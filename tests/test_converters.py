@@ -80,15 +80,15 @@ class TestMessagesToPrompt:
 
 
 class TestExtractParams:
-    def test_all_params(self):
+    def test_unsupported_params_ignored(self):
         body = {"temperature": 0.7, "top_p": 0.9, "max_tokens": 100}
         params = extract_params(body)
-        assert params == {"temperature": 0.7, "top_p": 0.9, "max_tokens": 100}
+        assert params == {}
 
-    def test_max_completion_tokens_overrides(self):
+    def test_max_completion_tokens_ignored(self):
         body = {"max_tokens": 100, "max_completion_tokens": 200}
         params = extract_params(body)
-        assert params["max_tokens"] == 200
+        assert params == {}
 
     def test_no_params(self):
         assert extract_params({"model": "gpt-4o"}) == {}

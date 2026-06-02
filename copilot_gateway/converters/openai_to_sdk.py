@@ -54,14 +54,9 @@ def extract_params(body: dict) -> dict:
     """Extract optional parameters from the OpenAI request body.
 
     Returns a dict of kwargs suitable for session creation.
+    Note: temperature, top_p, max_tokens, and max_completion_tokens are
+    accepted by the OpenAI API but not supported by CopilotClient.create_session(),
+    so they are intentionally excluded.
     """
     params = {}
-    if "temperature" in body:
-        params["temperature"] = body["temperature"]
-    if "top_p" in body:
-        params["top_p"] = body["top_p"]
-    if "max_tokens" in body:
-        params["max_tokens"] = body["max_tokens"]
-    if "max_completion_tokens" in body:
-        params["max_tokens"] = body["max_completion_tokens"]
     return params
