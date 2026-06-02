@@ -169,34 +169,31 @@ async def _stream_response(
 
         done = asyncio.Event()
         _queue: asyncio.Queue = asyncio.Queue()
-        _got_content = False  # Track whether we received any assistant content
+        _got_delta = False  # Whether we received streaming deltas
 
         def on_event(event):
-            nonlocal _got_content
+            nonlocal _got_delta
             etype = event.type.value
             if etype == "assistant.message_delta":
                 delta = getattr(event.data, "delta_content", "") or ""
                 if delta:
-                    _got_content = True
+                    _got_delta = True
                     chunk = make_stream_chunk(chunk_id, model, delta_content=delta)
                     _queue.put_nowait(chunk)
             elif etype == "assistant.message":
-                # Final message for this turn. If no deltas were streamed
-                # (e.g. multi-turn tool use), emit the full content now.
+                # Final message for this turn. If we never received streaming
+                # deltas, emit the full content as a single chunk (this
+                # happens when the agent uses tools across multiple turns).
                 content = getattr(event.data, "content", "") or ""
-                if content and not _got_content:
+                if content and not _got_delta:
                     chunk = make_stream_chunk(
                         chunk_id, model, delta_content=content,
                     )
                     _queue.put_nowait(chunk)
-                _got_content = True
-                done.set()
+                # Reset delta flag for the next turn
+                _got_delta = False
             elif etype == "session.idle":
-                # Only signal done if we've already received content.
-                # During tool calls the agent goes idle between turns
-                # before producing the final response.
-                if _got_content:
-                    done.set()
+                done.set()
 
         session.on(on_event)
 

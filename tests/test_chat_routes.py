@@ -49,8 +49,8 @@ def _make_streaming_session(session_id: str = "sdk-stream-1") -> MagicMock:
     """Create a fake session that works with the streaming code path.
 
     ``session.on(callback)`` captures the event handler.
-    ``session.send(prompt)`` fires an assistant.message event (which
-    marks the stream as done) so the generator completes.
+    ``session.send(prompt)`` fires a session.idle event (the authoritative
+    completion signal) so the generator completes.
     """
     session = AsyncMock()
     session.session_id = session_id
@@ -62,10 +62,10 @@ def _make_streaming_session(session_id: str = "sdk-stream-1") -> MagicMock:
         captured_handler["fn"] = handler
 
     def fake_send(prompt):
-        # Simulate the SDK firing assistant.message so the loop exits.
-        msg_event = MagicMock()
-        msg_event.type.value = "assistant.message"
-        captured_handler["fn"](msg_event)
+        # Simulate the SDK firing session.idle so the loop exits
+        idle_event = MagicMock()
+        idle_event.type.value = "session.idle"
+        captured_handler["fn"](idle_event)
 
     session.on = MagicMock(side_effect=fake_on)
     session.send = AsyncMock(side_effect=fake_send)
