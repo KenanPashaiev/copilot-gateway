@@ -38,6 +38,13 @@ _cache_time: float = 0
 _cache_lock = asyncio.Lock()
 
 
+def _clear_cache() -> None:
+    """Clear the model list cache (e.g. after a client restart)."""
+    global _cache, _cache_time
+    _cache = None
+    _cache_time = 0
+
+
 async def list_models(cache_ttl: int = 300) -> list[dict]:
     """Fetch available models from the Copilot SDK, with caching.
 

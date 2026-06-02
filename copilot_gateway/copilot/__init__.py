@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from typing import TYPE_CHECKING
 
 from copilot import CopilotClient, SubprocessConfig
@@ -40,8 +41,12 @@ async def get_copilot_client(config: AppConfig | None = None) -> CopilotClient:
 
             idle_timeout = config.copilot.session_idle_timeout if config else 7200
 
+            # Pick up token from env (may be set by admin auth flow)
+            github_token = os.environ.get("COPILOT_GITHUB_TOKEN")
+
             subprocess_config = SubprocessConfig(
                 session_idle_timeout_seconds=idle_timeout,
+                **({"github_token": github_token} if github_token else {}),
                 **kwargs,
             )
             _client = CopilotClient(config=subprocess_config)

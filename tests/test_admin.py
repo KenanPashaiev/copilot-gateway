@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import pytest
-
 from copilot_gateway.routes.admin import (
     ADMIN_MODEL_ID,
     _cmd_help,
+    _extract_token,
     _format_uptime,
+    _get_last_user_text,
+    _is_follow_up_token,
     _parse_command,
     admin_model_entry,
 )
@@ -23,64 +24,172 @@ class TestAdminModelEntry:
 
 class TestParseCommand:
     def test_help(self):
-        messages = [{"role": "user", "content": "help"}]
-        assert _parse_command(messages) == "help"
+        msgs = [{"role": "user", "content": "help"}]
+        assert _parse_command(msgs) == ("help", "")
 
     def test_status(self):
-        messages = [{"role": "user", "content": "status"}]
-        assert _parse_command(messages) == "status"
+        msgs = [{"role": "user", "content": "status"}]
+        assert _parse_command(msgs) == ("status", "")
 
     def test_models(self):
-        messages = [{"role": "user", "content": "show me the models"}]
-        assert _parse_command(messages) == "models"
-
-    def test_config(self):
-        messages = [{"role": "user", "content": "config"}]
-        assert _parse_command(messages) == "config"
+        msgs = [{"role": "user", "content": "models"}]
+        assert _parse_command(msgs) == ("models", "")
 
     def test_tools(self):
-        messages = [{"role": "user", "content": "what tools are loaded?"}]
-        assert _parse_command(messages) == "tools"
+        msgs = [{"role": "user", "content": "tools"}]
+        assert _parse_command(msgs) == ("tools", "")
 
-    def test_unrecognized_defaults_to_help(self):
-        messages = [{"role": "user", "content": "asdfghjkl"}]
-        assert _parse_command(messages) == "help"
+    def test_restart(self):
+        msgs = [{"role": "user", "content": "restart"}]
+        assert _parse_command(msgs) == ("restart", "")
 
-    def test_empty_messages_defaults_to_help(self):
-        assert _parse_command([]) == "help"
+    def test_auth_status(self):
+        msgs = [{"role": "user", "content": "auth"}]
+        assert _parse_command(msgs) == ("auth", "")
+
+    def test_auth_login(self):
+        msgs = [{"role": "user", "content": "auth login"}]
+        assert _parse_command(msgs) == ("auth_login", "")
+
+    def test_auth_logout(self):
+        msgs = [{"role": "user", "content": "auth logout"}]
+        assert _parse_command(msgs) == ("auth_logout", "")
+
+    def test_auth_token(self):
+        msgs = [{"role": "user", "content": "auth token ghp_abc123def456"}]
+        cmd, arg = _parse_command(msgs)
+        assert cmd == "auth_token"
+        assert "ghp_abc123def456" in arg
+
+    def test_unrecognized_defaults_to_unknown(self):
+        msgs = [{"role": "user", "content": "asdfghjkl"}]
+        assert _parse_command(msgs) == ("unknown", "")
+
+    def test_empty_messages(self):
+        assert _parse_command([]) == ("unknown", "")
 
     def test_uses_last_user_message(self):
-        messages = [
+        msgs = [
             {"role": "user", "content": "help"},
             {"role": "assistant", "content": "some response"},
             {"role": "user", "content": "status"},
         ]
-        assert _parse_command(messages) == "status"
-
-    def test_multimodal_content(self):
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": "show me the status"},
-                ],
-            }
-        ]
-        assert _parse_command(messages) == "status"
+        assert _parse_command(msgs) == ("status", "")
 
     def test_case_insensitive(self):
-        messages = [{"role": "user", "content": "STATUS"}]
-        assert _parse_command(messages) == "status"
+        msgs = [{"role": "user", "content": "AUTH LOGIN"}]
+        assert _parse_command(msgs) == ("auth_login", "")
+
+    def test_follow_up_token_detected(self):
+        msgs = [
+            {"role": "user", "content": "auth login"},
+            {"role": "assistant", "content": "Type: auth token YOUR_TOKEN"},
+            {"role": "user", "content": "ghp_abcdef1234567890abcdef1234567890abcdef"},
+        ]
+        cmd, arg = _parse_command(msgs)
+        assert cmd == "auth_token"
+        assert arg.startswith("ghp_")
+
+    def test_follow_up_non_token_not_detected(self):
+        msgs = [
+            {"role": "user", "content": "auth login"},
+            {"role": "assistant", "content": "Type: auth token YOUR_TOKEN"},
+            {"role": "user", "content": "what?"},
+        ]
+        assert _parse_command(msgs) == ("unknown", "")
+
+
+class TestGetLastUserText:
+    def test_simple(self):
+        msgs = [{"role": "user", "content": "hello"}]
+        assert _get_last_user_text(msgs) == "hello"
+
+    def test_multimodal(self):
+        msgs = [
+            {
+                "role": "user",
+                "content": [{"type": "text", "text": "status check"}],
+            }
+        ]
+        assert _get_last_user_text(msgs) == "status check"
+
+    def test_empty(self):
+        assert _get_last_user_text([]) == ""
+
+    def test_skips_assistant(self):
+        msgs = [
+            {"role": "user", "content": "first"},
+            {"role": "assistant", "content": "reply"},
+            {"role": "user", "content": "second"},
+        ]
+        assert _get_last_user_text(msgs) == "second"
+
+
+class TestExtractToken:
+    def test_ghp_token(self):
+        token = _extract_token("ghp_abcdef1234567890abcdef1234567890abcdef")
+        assert token is not None
+        assert token.startswith("ghp_")
+
+    def test_github_pat_token(self):
+        token = _extract_token("github_pat_abcdefghijklmnopqrstuv1234")
+        assert token is not None
+        assert token.startswith("github_pat_")
+
+    def test_code_fenced_token(self):
+        token = _extract_token("`ghp_abcdef1234567890abcdef1234567890abcdef`")
+        assert token is not None
+        assert token.startswith("ghp_")
+
+    def test_long_string_accepted(self):
+        # A 40-char hex string that doesn't match known prefixes
+        token = _extract_token("a" * 40)
+        assert token == "a" * 40
+
+    def test_short_string_rejected(self):
+        assert _extract_token("short") is None
+
+    def test_string_with_spaces_rejected(self):
+        assert _extract_token("this is not a token") is None
+
+    def test_empty_string(self):
+        assert _extract_token("") is None
+
+
+class TestIsFollowUpToken:
+    def test_after_auth_instructions(self):
+        msgs = [
+            {"role": "assistant", "content": "Type: auth token YOUR_TOKEN"},
+            {"role": "user", "content": "ghp_abc"},
+        ]
+        assert _is_follow_up_token(msgs) is True
+
+    def test_after_unrelated_message(self):
+        msgs = [
+            {"role": "assistant", "content": "Here are the models"},
+            {"role": "user", "content": "ghp_abc"},
+        ]
+        assert _is_follow_up_token(msgs) is False
+
+    def test_empty(self):
+        assert _is_follow_up_token([]) is False
 
 
 class TestCmdHelp:
-    def test_contains_commands(self):
-        result = _cmd_help()
+    def test_authenticated_help(self):
+        result = _cmd_help(auth_ok=True)
+        assert "auth" in result
         assert "status" in result
         assert "models" in result
-        assert "config" in result
         assert "tools" in result
+        assert "restart" in result
         assert "help" in result
+        assert "Not authenticated" not in result
+
+    def test_unauthenticated_help(self):
+        result = _cmd_help(auth_ok=False)
+        assert "Not authenticated" in result
+        assert "auth login" in result
 
 
 class TestFormatUptime:
