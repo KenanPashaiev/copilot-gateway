@@ -173,22 +173,30 @@ async def _stream_response(
 
         def on_event(event):
             nonlocal _got_content
-            if event.type.value == "assistant.message_delta":
+            etype = event.type.value
+            if etype == "assistant.message_delta":
                 delta = getattr(event.data, "delta_content", "") or ""
                 if delta:
                     _got_content = True
                     chunk = make_stream_chunk(chunk_id, model, delta_content=delta)
                     _queue.put_nowait(chunk)
-            elif event.type.value == "session.idle":
+            elif etype == "assistant.message":
+                # Final message for this turn. If no deltas were streamed
+                # (e.g. multi-turn tool use), emit the full content now.
+                content = getattr(event.data, "content", "") or ""
+                if content and not _got_content:
+                    chunk = make_stream_chunk(
+                        chunk_id, model, delta_content=content,
+                    )
+                    _queue.put_nowait(chunk)
+                _got_content = True
+                done.set()
+            elif etype == "session.idle":
                 # Only signal done if we've already received content.
                 # During tool calls the agent goes idle between turns
                 # before producing the final response.
                 if _got_content:
                     done.set()
-            elif event.type.value == "assistant.message":
-                # Final message event — always marks the end
-                _got_content = True
-                done.set()
 
         session.on(on_event)
 
