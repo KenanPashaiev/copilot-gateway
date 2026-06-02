@@ -387,7 +387,6 @@ async def handle_admin_streaming(
 ):
     """Handle a streaming request to the admin model (SSE generator)."""
     command, arg = _parse_command(messages)
-    content = await _dispatch(command, arg, messages, request)
 
     chunk_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
 
@@ -395,17 +394,114 @@ async def handle_admin_streaming(
     initial = make_stream_chunk(chunk_id, ADMIN_MODEL_ID, role="assistant")
     yield f"data: {json.dumps(initial)}\n\n"
 
-    # Stream content in small pieces for the typing effect
-    chunk_size = 20
-    for i in range(0, len(content), chunk_size):
-        piece = content[i:i + chunk_size]
-        chunk = make_stream_chunk(chunk_id, ADMIN_MODEL_ID, delta_content=piece)
-        yield f"data: {json.dumps(chunk)}\n\n"
+    # auth_login gets a special live-polling stream
+    if command == "auth_login":
+        async for piece in _stream_auth_login(request):
+            chunk = make_stream_chunk(chunk_id, ADMIN_MODEL_ID, delta_content=piece)
+            yield f"data: {json.dumps(chunk)}\n\n"
+    else:
+        content = await _dispatch(command, arg, messages, request)
+        chunk_size = 20
+        for i in range(0, len(content), chunk_size):
+            piece = content[i:i + chunk_size]
+            chunk = make_stream_chunk(chunk_id, ADMIN_MODEL_ID, delta_content=piece)
+            yield f"data: {json.dumps(chunk)}\n\n"
 
     # Final chunk
     final = make_stream_chunk(chunk_id, ADMIN_MODEL_ID, finish_reason="stop")
     yield f"data: {json.dumps(final)}\n\n"
     yield "data: [DONE]\n\n"
+
+
+async def _stream_auth_login(request: Request):
+    """Async generator: start device flow, poll until authorized, yield text."""
+    client_id = request.app.state.config.copilot.github_client_id
+    if not client_id:
+        yield (
+            "\u274c **Device flow not configured.**\n\n"
+            "Set `copilot.github_client_id` in your config to enable "
+            "interactive login."
+        )
+        return
+
+    try:
+        device = await _start_device_flow(client_id)
+    except Exception as e:
+        logger.exception("Admin: device flow start failed")
+        yield f"\u274c **Failed to start device flow:** {e}"
+        return
+
+    uri = device["verification_uri"]
+    code = device["user_code"]
+    device_code = device["device_code"]
+    interval = device.get("interval", 5)
+    expires_in = device.get("expires_in", 900)
+    deadline = time.time() + expires_in
+
+    # Stream the instructions
+    yield (
+        "**GitHub Device Login**\n\n"
+        f"1. Go to: **[{uri}]({uri})**\n"
+        f"2. Enter code: **`{code}`**\n"
+        f"3. Authorize the application\n\n"
+        "Waiting for authorization"
+    )
+
+    # Poll until authorized, expired, or denied
+    while time.time() < deadline:
+        await asyncio.sleep(interval)
+        yield "."
+
+        try:
+            result = await _poll_device_flow(client_id, device_code)
+        except Exception:
+            logger.debug("Admin: poll error, will retry")
+            continue
+
+        if result.get("access_token"):
+            # Success — store and restart
+            token = result["access_token"]
+            request.app.state.github_token = token
+            request.app.state.logged_out = False
+            try:
+                await _restart_client(request)
+                auth_info = await _get_auth_info()
+                login = auth_info.get("login") or "unknown"
+                yield (
+                    f"\n\n\u2705 **Authenticated as @{login}!**\n\n"
+                    "Token stored. You can now use any model for chat.\n\n"
+                    "Type **models** to see available models."
+                )
+            except Exception as e:
+                logger.exception("Admin: restart after auth failed")
+                yield f"\n\n\u274c **Error restarting client:** {e}"
+            return
+
+        error = result.get("error", "")
+        if error == "slow_down":
+            interval += 5
+        elif error == "expired_token":
+            yield (
+                "\n\n\u274c **Code expired.**\n\n"
+                "Start a new chat and type **auth login** to try again."
+            )
+            return
+        elif error == "access_denied":
+            yield (
+                "\n\n\u274c **Authorization was denied.**\n\n"
+                "Start a new chat and type **auth login** to try again."
+            )
+            return
+        elif error != "authorization_pending":
+            desc = result.get("error_description", error)
+            yield f"\n\n\u274c **Login failed:** {desc}"
+            return
+
+    # Timed out
+    yield (
+        "\n\n\u274c **Timed out** waiting for authorization.\n\n"
+        "Start a new chat and type **auth login** to try again."
+    )
 
 
 # ------------------------------------------------------------------
